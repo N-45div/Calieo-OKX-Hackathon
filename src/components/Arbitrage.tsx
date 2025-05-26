@@ -83,7 +83,7 @@ export default function ArbitrageOpportunities() {
             console.error('Error fetching batch token prices:', error);
             // Return mock data for demonstration
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            return tokenAddresses.map((address, index) => ({
+            return tokenAddresses.map((address) => ({
                 chainIndex: chainIndex,
                 tokenContractAddress: address,
                 time: Date.now().toString(),
