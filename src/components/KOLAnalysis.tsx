@@ -346,7 +346,7 @@ export default function SolanaAlphaHunter() {
                 </GlassCard>
               ))
             ) : filteredContracts.length > 0 ? (
-              filteredContracts.map((contract, index) => (
+              filteredContracts.map((contract) => (
                 <GlassCard key={contract.address} className="p-6 group">
                   {/* Header */}
                   <div className="flex items-start justify-between mb-4">

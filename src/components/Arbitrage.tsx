@@ -1,16 +1,6 @@
 import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
-interface TokenPrice {
-    chainIndex: string;
-    tokenContractAddress: string;
-    time: string;
-    price: string;
-    marketCap: string;
-    priceChange24H: string;
-    volume24H: string;
-}
-
 interface CandlestickData {
     ts: number;
     o: number;
@@ -92,6 +82,7 @@ export default function ArbitrageOpportunities() {
         } catch (error) {
             console.error('Error fetching batch token prices:', error);
             // Return mock data for demonstration
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             return tokenAddresses.map((address, index) => ({
                 chainIndex: chainIndex,
                 tokenContractAddress: address,
