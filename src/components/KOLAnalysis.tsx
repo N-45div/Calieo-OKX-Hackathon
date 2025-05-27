@@ -1,105 +1,9 @@
 import { useState, useEffect } from "react";
-import { Search, Zap, Activity, TrendingUp, AlertTriangle, Shield, Clock, ExternalLink, Copy, CheckCircle, Radar, Flame,  Sparkles, BarChart3 } from "lucide-react";
+import { Search, Zap, Activity, TrendingUp, AlertTriangle, Shield, Clock, ExternalLink, Copy, CheckCircle, Radar, Flame, Sparkles, BarChart3 } from "lucide-react";
+import io, { Socket } from "socket.io-client";
 
-// Mock data for demonstration
-const MOCK_CONTRACTS = [
-  {
-    address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
-    symbol: "BONK",
-    name: "Bonk Inu",
-    deployedAt: new Date(Date.now() - 1000 * 60 * 30),
-    mentionedBy: ["degenspartan", "SolBigBrain", "0xSisyphus"],
-    tweets: [],
-    riskScore: 25,
-    liquidityScore: 85,
-    socialScore: 92,
-    verified: true,
-    marketCap: 150000,
-    holders: 12500,
-    description: "Community-driven meme token with strong fundamentals and locked liquidity...",
-    tags: ["LOW_RISK", "TRENDING", "ALPHA_HUNTER"]
-  },
-  {
-    address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-    symbol: "RAY",
-    name: "Raydium",
-    deployedAt: new Date(Date.now() - 1000 * 60 * 45),
-    mentionedBy: ["thedefiedge", "DegenTrades"],
-    tweets: [],
-    riskScore: 15,
-    liquidityScore: 95,
-    socialScore: 88,
-    verified: true,
-    marketCap: 2500000,
-    holders: 45000,
-    description: "DEX protocol on Solana with automated market making capabilities...",
-    tags: ["LOW_RISK", "TRENDING"]
-  },
-  {
-    address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    symbol: "PEPE",
-    name: "Pepe Solana",
-    deployedAt: new Date(Date.now() - 1000 * 60 * 15),
-    mentionedBy: ["CryptoGodJohn", "alphakek_", "DegenSpartan", "solana_daily"],
-    tweets: [],
-    riskScore: 75,
-    liquidityScore: 45,
-    socialScore: 78,
-    verified: false,
-    marketCap: 25000,
-    holders: 2500,
-    description: "Fresh meme token launch with community backing. Dev doxxed, liquidity locked for 6 months...",
-    tags: ["HIGH_RISK", "FRESH", "TRENDING"]
-  },
-  {
-    address: "SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt",
-    symbol: "SRM",
-    name: "Serum",
-    deployedAt: new Date(Date.now() - 1000 * 60 * 5),
-    mentionedBy: ["OnChainWizard"],
-    tweets: [],
-    riskScore: 35,
-    liquidityScore: 70,
-    socialScore: 65,
-    verified: false,
-    marketCap: 75000,
-    holders: 8500,
-    description: "Decentralized exchange protocol built on Solana blockchain...",
-    tags: ["NEW", "ALPHA_HUNTER"]
-  },
-  {
-    address: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
-    symbol: "COPE",
-    name: "Cope Protocol",
-    deployedAt: new Date(Date.now() - 1000 * 60 * 2),
-    mentionedBy: ["CryptoMillions", "SolanaLegend", "DegenAlpha"],
-    tweets: [],
-    riskScore: 85,
-    liquidityScore: 25,
-    socialScore: 55,
-    verified: false,
-    marketCap: 5000,
-    holders: 150,
-    description: "Ultra fresh launch - stealth drop with anonymous dev. Proceed with extreme caution...",
-    tags: ["HIGH_RISK", "FRESH"]
-  },
-  {
-    address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-    symbol: "USDT",
-    name: "Tether USD",
-    deployedAt: new Date(Date.now() - 1000 * 60 * 60),
-    mentionedBy: ["solana_daily", "SolanaNews"],
-    tweets: [],
-    riskScore: 10,
-    liquidityScore: 100,
-    socialScore: 95,
-    verified: true,
-    marketCap: 50000000,
-    holders: 250000,
-    description: "Stablecoin pegged to USD, widely used across DeFi protocols...",
-    tags: ["LOW_RISK"]
-  }
-];
+// Backend URL (update with your actual backend URL)
+const BACKEND_URL = "http://localhost:3001"; // Adjust based on your deployment
 
 interface SolanaContract {
   address: string;
@@ -116,6 +20,13 @@ interface SolanaContract {
   holders?: number;
   description: string;
   tags: string[];
+  dexData?: {
+    price: number;
+    volume24h: number;
+    liquidity: number;
+    priceChange24h: number;
+    dexUrl: string;
+  };
 }
 
 const RiskBadge = ({ score }: { score: number }) => {
@@ -145,7 +56,14 @@ const TagBadge = ({ tag }: { tag: string }) => {
     'TRENDING': 'bg-purple-500/10 text-purple-300 border-purple-500/20',
     'ALPHA_HUNTER': 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20',
     'FRESH': 'bg-orange-500/10 text-orange-300 border-orange-500/20',
-    'NEW': 'bg-yellow-500/10 text-yellow-300 border-yellow-500/20'
+    'ULTRA_FRESH': 'bg-orange-600/10 text-orange-400 border-orange-600/20',
+    'NEW': 'bg-yellow-500/10 text-yellow-300 border-yellow-500/20',
+    'HIGH_VOLUME': 'bg-blue-500/10 text-blue-300 border-blue-500/20',
+    'GOOD_LIQUIDITY': 'bg-teal-500/10 text-teal-300 border-teal-500/20',
+    'PUMPING': 'bg-green-500/10 text-green-300 border-green-500/20',
+    'DUMPING': 'bg-red-600/10 text-red-400 border-red-600/20',
+    'VERIFIED': 'bg-emerald-600/10 text-emerald-400 border-emerald-600/20',
+    'NO_DEX_DATA': 'bg-gray-500/10 text-gray-300 border-gray-500/20'
   };
   
   return (
@@ -195,33 +113,84 @@ export default function SolanaAlphaHunter() {
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [filter, setFilter] = useState<'all' | 'low_risk' | 'trending' | 'fresh'>('all');
+  const [scanStatus, setScanStatus] = useState<string | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
 
-  const scanForContracts = async () => {
-    setLoading(true);
-    try {
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Add some randomization to make it feel more dynamic
-      const shuffled = [...MOCK_CONTRACTS].sort(() => Math.random() - 0.5);
-      setContracts(shuffled);
-      setLastUpdate(new Date());
-    } catch (error) {
-      console.error('Error scanning contracts:', error);
-    } finally {
+  // Initialize WebSocket connection
+  useEffect(() => {
+    const socketInstance = io(BACKEND_URL, {
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+
+    setSocket(socketInstance);
+
+    // Handle WebSocket connection
+    socketInstance.on("connect", () => {
+      console.log("Connected to WebSocket server:", socketInstance.id);
+    });
+
+    // Handle contracts update
+    socketInstance.on("contracts-update", (data: { contracts: SolanaContract[], lastUpdate: string }) => {
+      console.log("Received contracts update:", data);
+      setContracts(data.contracts.map(contract => ({
+        ...contract,
+        deployedAt: new Date(contract.deployedAt),
+      })));
+      setLastUpdate(new Date(data.lastUpdate));
       setLoading(false);
+    });
+
+    // Handle scan status
+    socketInstance.on("scan-status", (data: { inProgress: boolean, lastScan?: string, stage?: string }) => {
+      console.log("Received scan status:", data);
+      setLoading(data.inProgress);
+      if (data.stage) {
+        setScanStatus(data.stage);
+      } else {
+        setScanStatus(null);
+      }
+      if (data.lastScan) {
+        setLastUpdate(new Date(data.lastScan));
+      }
+    });
+
+    // Handle WebSocket errors
+    socketInstance.on("connect_error", (error: Error) => {
+      console.error("WebSocket connection error:", error);
+      setLoading(false);
+      setScanStatus("Failed to connect to server");
+    });
+
+    socketInstance.on("scan-error", (data: { error: string }) => {
+      console.error("Scan error:", data.error);
+      setLoading(false);
+      setScanStatus(`Scan failed: ${data.error}`);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      socketInstance.disconnect();
+      console.log("Disconnected from WebSocket server");
+    };
+  }, []);
+
+  // Trigger manual scan
+  const scanForContracts = () => {
+    if (socket && !loading) {
+      setLoading(true);
+      setScanStatus("Initiating manual scan...");
+      socket.emit("request-scan");
     }
   };
-
-  useEffect(() => {
-    scanForContracts();
-  }, []);
 
   const filteredContracts = contracts.filter(contract => {
     switch (filter) {
       case 'low_risk': return contract.riskScore < 40;
       case 'trending': return contract.tags.includes('TRENDING');
-      case 'fresh': return contract.tags.includes('FRESH') || contract.tags.includes('NEW');
+      case 'fresh': return contract.tags.includes('FRESH') || contract.tags.includes('ULTRA_FRESH') || contract.tags.includes('NEW');
       default: return true;
     }
   });
@@ -245,18 +214,24 @@ export default function SolanaAlphaHunter() {
                 <div className="absolute inset-0 w-8 h-8 sm:w-10 sm:h-10 bg-cyan-400/20 rounded-full blur-xl animate-pulse"></div>
               </div>
               <h1 className="text-3xl sm:text-5xl lg:text-6xl font-bold bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">
-                Solana Alpha Hunter
+                Calieo Alpha Hunter
               </h1>
               <Sparkles className="w-6 h-6 sm:w-8 sm:h-8 text-purple-400 animate-pulse" />
             </div>
             <p className="text-slate-400 text-sm sm:text-lg max-w-4xl mx-auto leading-relaxed">
-              Discover newly deployed Solana contracts mentioned by alpha hunters and degens on X. 
+              Discover newly deployed Solana contracts mentioned by alpha hunters on X. 
               <span className="text-cyan-400 font-semibold"> Find the next gem before it moons! </span>🚀
             </p>
             {lastUpdate && (
               <div className="flex items-center justify-center gap-2 mt-4 text-xs sm:text-sm text-slate-500">
                 <Clock className="w-4 h-4" />
-                Last scan: {lastUpdate.toLocaleTimeString()}
+                Last scan: {lastUpdate.toLocaleString()}
+              </div>
+            )}
+            {scanStatus && (
+              <div className="flex items-center justify-center gap-2 mt-2 text-xs sm:text-sm text-cyan-400">
+                <Radar className="w-4 h-4 animate-spin" />
+                {scanStatus}
               </div>
             )}
           </div>
@@ -273,7 +248,7 @@ export default function SolanaAlphaHunter() {
               icon={Shield} 
               label="Low Risk" 
               value={contracts.filter(c => c.riskScore < 40).length} 
-              color="from-emerald-500 to-teal-500" 
+              color="from-emerald-500 to-teal-500" importation
             />
             <StatCard 
               icon={Flame} 
@@ -284,7 +259,7 @@ export default function SolanaAlphaHunter() {
             <StatCard 
               icon={Zap} 
               label="Fresh" 
-              value={contracts.filter(c => c.tags.includes('FRESH')).length} 
+              value={contracts.filter(c => c.tags.includes('FRESH') || c.tags.includes('ULTRA_FRESH')).length} 
               color="from-yellow-500 to-orange-500" 
             />
           </div>
@@ -422,7 +397,7 @@ export default function SolanaAlphaHunter() {
                       Solscan
                     </button>
                     <button
-                      onClick={() => window.open(`https://dexscreener.com/solana/${contract.address}`, '_blank')}
+                      onClick={() => window.open(contract.dexData?.dexUrl || `https://dexscreener.com/solana/${contract.address}`, '_blank')}
                       className="flex-1 bg-gradient-to-r from-emerald-600/20 to-emerald-500/20 hover:from-emerald-600/30 hover:to-emerald-500/30 text-emerald-300 px-3 py-2.5 rounded-xl text-xs font-medium transition-all duration-300 flex items-center justify-center gap-2 border border-emerald-500/20 backdrop-blur-sm"
                     >
                       <BarChart3 className="w-3 h-3" />

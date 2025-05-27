@@ -12,10 +12,10 @@ const POLLING_INTERVAL = 5000;
 const BASE_URL = "https://web3.okx.com";
 
 // API Credentials (Hardcoded for simplicity; use a backend in production)
-const apiKey="";
-const secretKey="";
-const apiPassphrase="";
-const projectId="";
+const apiKey=process.env.OKX_API_KEY || "";
+const secretKey=process.env.OKX_SECRET || "";
+const apiPassphrase=process.env.PASSPHRASE || "";
+const projectId=process.env.PROJECT_ID || "";
 
 // Rate limiting configuration
 const RATE_LIMIT = {

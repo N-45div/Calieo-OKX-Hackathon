@@ -36,10 +36,10 @@ export default function ArbitrageOpportunities() {
     
     // API Configuration
     const apiConfig = {
-        apiKey: "",
-        secretKey: "",
-        apiPassphrase: "",
-        projectId: ""
+        apiKey : process.env.VITE_OKX_API_KEY || "",
+        secretKey: process.env.VITE_OKX_SECRET_KEY || "",
+        apiPassphrase: process.env.VITE_OKX_API_PASSPHRASE || "",
+        projectId: process.env.VITE_OKX_PROJECT_ID || ""
     };
 
     // Default token addresses for different chains
