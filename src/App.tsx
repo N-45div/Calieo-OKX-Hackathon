@@ -104,7 +104,7 @@ export default function App() {
                                 </div>
                                 <div>
                                     <h1 className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-white via-cyan-200 to-purple-200 bg-clip-text text-transparent">
-                                        Calieo Swap
+                                        Calieo
                                     </h1>
                                     <p className="text-gray-400 text-sm">Next-Gen DeFi Protocol</p>
                                 </div>

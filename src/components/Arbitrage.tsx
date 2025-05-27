@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
+
+
 interface CandlestickData {
     ts: number;
     o: number;
@@ -34,10 +36,10 @@ export default function ArbitrageOpportunities() {
     
     // API Configuration
     const apiConfig = {
-        apiKey: "89741cb9-fa03-49b6-a6db-5b974a5f8fdf",
-        secretKey: "6E769FF4CC4C695D9E91D216424D648A",
-        apiPassphrase: "Suresh@23",
-        projectId: "c38b1db0c8c646520faa9282dcf90717"
+        apiKey: "",
+        secretKey: "",
+        apiPassphrase: "",
+        projectId: ""
     };
 
     // Default token addresses for different chains

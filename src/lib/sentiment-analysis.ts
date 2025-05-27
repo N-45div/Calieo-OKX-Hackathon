@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Initialize the Google Generative AI client
-const genAI = new GoogleGenerativeAI(process.env.VITE_GOOGLE_API_KEY || "");
+const genAI = new GoogleGenerativeAI("");
 
 // Configure the model (using Gemini for text analysis)
 const model = genAI.getGenerativeModel({
