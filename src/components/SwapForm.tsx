@@ -126,8 +126,8 @@ export default function SwapForm({ balance }: SwapFormProps) {
       const recentFees = await connection.getRecentPrioritizationFees();
       const maxFee = Math.max(...recentFees.map(fee => fee.prioritizationFee), 10000);
       return Math.min(maxFee * 2, 100000);
-    } catch (error) {
-      console.error("Error getting priority fee, using default:", error);
+    } catch {
+      console.error("Error getting priority fee, using default:");
       return 10000;
     }
   };
@@ -164,9 +164,22 @@ const removeDuplicateInstructions = (instructions: TransactionInstruction[]): Tr
   return uniqueInstructions;
 };
 
-// Prepare transaction for signing (Updated to remove duplicates)
 
-// Prepare transaction for signing (Updated to log instructions and validate ATA)
+// Helper function to validate if a public key is on the Ed25519 curve
+const isValidEd25519PublicKey = (pubkey: PublicKey): boolean => {
+  try {
+    // Solana's PublicKey constructor doesn't validate the curve, but we can use a trick:
+    // Convert to bytes and back to ensure it's a valid Ed25519 key
+    const bytes = pubkey.toBytes();
+    new PublicKey(bytes); // This will throw if the key is invalid
+    // Additional check: Ed25519 keys must be 32 bytes
+    return bytes.length === 32;
+  } catch {
+    return false;
+  }
+};
+
+// Prepare transaction for signing (Updated to validate public keys)
 const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapData, userAddress: string): Promise<VersionedTransaction> => {
   try {
     if (!connection) {
@@ -245,11 +258,11 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
       // Check if compute budget instructions already exist
       const hasComputeUnitLimit = swapInstructions.some(instr =>
         instr.programId.equals(ComputeBudgetProgram.programId) &&
-        Buffer.from(instr.data).slice(0, 1).toString('hex') === '02' // setComputeUnitLimit discriminator
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '02'
       );
       const hasComputeUnitPrice = swapInstructions.some(instr =>
         instr.programId.equals(ComputeBudgetProgram.programId) &&
-        Buffer.from(instr.data).slice(0, 1).toString('hex') === '03' // setComputeUnitPrice discriminator
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '03'
       );
 
       if (!hasComputeUnitLimit) instructions.push(computeBudgetIx);
@@ -281,11 +294,21 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
               isWritable: k.isWritable,
             })),
           });
-          // Expected ATA address: keys[0] should be the ATA address
           const ataAddress = instr.keys[0]?.pubkey;
-          const walletAddress = instr.keys[1]?.pubkey; // Usually the wallet address is the second key
-          const tokenMintAddress = instr.keys[2]?.pubkey; // Usually the token mint is the third key
+          const walletAddress = instr.keys[1]?.pubkey;
+          const tokenMintAddress = instr.keys[2]?.pubkey;
           if (ataAddress && walletAddress && tokenMintAddress) {
+            // Validate public keys
+            if (!isValidEd25519PublicKey(walletAddress)) {
+              throw new Error(
+                `Invalid wallet address in ATA instruction ${index}: ${walletAddress.toBase58()} is not a valid Ed25519 public key`
+              );
+            }
+            if (!isValidEd25519PublicKey(tokenMintAddress)) {
+              throw new Error(
+                `Invalid token mint address in ATA instruction ${index}: ${tokenMintAddress.toBase58()} is not a valid Ed25519 public key`
+              );
+            }
             const expectedAtaAddress = getAssociatedTokenAddressSync(
               new PublicKey(tokenMintAddress),
               new PublicKey(walletAddress)
@@ -461,11 +484,11 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
       // Check for existing compute budget instructions
       const hasComputeUnitLimit = swapInstructions.some(instr =>
         instr.programId.equals(ComputeBudgetProgram.programId) &&
-        Buffer.from(instr.data).slice(0, 1).toString('hex') === '02' // setComputeUnitLimit discriminator
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '02'
       );
       const hasComputeUnitPrice = swapInstructions.some(instr =>
         instr.programId.equals(ComputeBudgetProgram.programId) &&
-        Buffer.from(instr.data).slice(0, 1).toString('hex') === '03' // setComputeUnitPrice discriminator
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '03'
       );
 
       const allInstructions: TransactionInstruction[] = [];
@@ -502,6 +525,16 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
           const walletAddress = instr.keys[1]?.pubkey;
           const tokenMintAddress = instr.keys[2]?.pubkey;
           if (ataAddress && walletAddress && tokenMintAddress) {
+            if (!isValidEd25519PublicKey(walletAddress)) {
+              throw new Error(
+                `Invalid wallet address in ATA instruction ${index}: ${walletAddress.toBase58()} is not a valid Ed25519 public key`
+              );
+            }
+            if (!isValidEd25519PublicKey(tokenMintAddress)) {
+              throw new Error(
+                `Invalid token mint address in ATA instruction ${index}: ${tokenMintAddress.toBase58()} is not a valid Ed25519 public key`
+              );
+            }
             const expectedAtaAddress = getAssociatedTokenAddressSync(
               new PublicKey(tokenMintAddress),
               new PublicKey(walletAddress)
