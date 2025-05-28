@@ -102,7 +102,7 @@ interface Contract {
   dexData: DexData | null;
 }
 
-// Interfaces for OKX DEX API
+// Interfaces for OKX DEX API (Existing)
 interface OKXQuoteData {
   chainIndex: string;
   fromTokenAmount: string;
@@ -220,6 +220,18 @@ interface SwapResult {
   txHash?: string;
   status?: string;
   error?: string;
+}
+
+// New Interface for Candlestick Data
+interface OKXCandlestickData {
+  ts: string; // Opening time of the candlestick, Unix timestamp in milliseconds
+  o: string;  // Open price
+  h: string;  // Highest price
+  l: string;  // Lowest price
+  c: string;  // Close price
+  vol: string; // Trading volume in base currency
+  volUsd: string; // Trading volume in USD
+  confirm: string; // 0 = uncompleted, 1 = completed
 }
 
 // In-memory storage (Existing)
@@ -788,7 +800,87 @@ const getOKXHeaders = (timestamp: string, method: string, requestPath: string, q
   };
 };
 
-// Fetch Swap Quote from OKX DEX
+// Fetch Candlestick Data from OKX DEX
+const getOKXCandlesticks = async (
+  chainIndex: string,
+  tokenContractAddress: string,
+  bar: string = "1m",
+  after?: string,
+  before?: string,
+  limit: string = "100",
+  retries = 3,
+  delayMs = 2000
+): Promise<OKXCandlestickData[]> => {
+  const timestamp = new Date().toISOString();
+  const path = `dex/market/candles`;
+  const requestPath = `/api/v5/${path}`;
+
+  const params: Record<string, string> = {
+    chainIndex,
+    tokenContractAddress,
+    bar,
+    limit,
+  };
+
+  if (after) params.after = after;
+  if (before) params.before = before;
+
+  const queryString = "?" + new URLSearchParams(params).toString();
+  const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt} to fetch candlestick data...`);
+      const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+        headers,
+        timeout: 20000,
+      });
+
+      console.log("OKX API Response for Candlesticks:", response.data);
+
+      if (response.data.code !== "0" || !response.data.data) {
+        throw new Error(`Candlesticks API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+      }
+
+      // Transform the array response into objects
+      const candlesticks: OKXCandlestickData[] = response.data.data.map((candle: any[]) => ({
+        ts: candle[0],
+        o: candle[1],
+        h: candle[2],
+        l: candle[3],
+        c: candle[4],
+        vol: candle[5],
+        volUsd: candle[6],
+        confirm: candle[7],
+      }));
+
+      return candlesticks;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        console.error(`OKX API Error on attempt ${attempt} in getOKXCandlesticks:`, {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+          request: {
+            url: `${OKX_BASE_URL}${requestPath}${queryString}`,
+            headers,
+            params,
+          },
+        });
+        if (error.response?.status === 429 && attempt < retries) {
+          console.warn(`Rate limit exceeded, retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries reached for OKX API request in getOKXCandlesticks");
+};
+
+// Fetch Swap Quote from OKX DEX (Existing)
 const getOKXSwapQuote = async (
   fromTokenAddress: string,
   toTokenAddress: string,
@@ -840,7 +932,7 @@ const getOKXSwapQuote = async (
   }
 };
 
-// Fetch Swap Instructions from OKX DEX (Updated with Retry Logic)
+// Fetch Swap Instructions from OKX DEX (Existing)
 const getOKXSwapInstructions = async (
   fromTokenAddress: string,
   toTokenAddress: string,
@@ -914,7 +1006,7 @@ const getOKXSwapInstructions = async (
   throw new Error("Max retries reached for OKX API request in getOKXSwapInstructions");
 };
 
-// Fallback: Fetch Swap Data from OKX DEX /swap endpoint
+// Fallback: Fetch Swap Data from OKX DEX /swap endpoint (Existing)
 const getOKXSwapData = async (
   fromTokenAddress: string,
   toTokenAddress: string,
@@ -987,7 +1079,7 @@ const getOKXSwapData = async (
   throw new Error("Max retries reached for OKX API request in getOKXSwapData");
 };
 
-// Broadcast Transaction via OKX DEX
+// Broadcast Transaction via OKX DEX (Existing)
 const broadcastOKXTransaction = async (signedTx: string, userAddress: string): Promise<string> => {
   const path = `dex/pre-transaction/broadcast-transaction`;
   const requestPath = `/api/v5/${path}`;
@@ -1028,7 +1120,7 @@ const broadcastOKXTransaction = async (signedTx: string, userAddress: string): P
   }
 };
 
-// Track Transaction via OKX DEX
+// Track Transaction via OKX DEX (Existing)
 const trackOKXTransaction = async (orderId: string, intervalMs = 5000, timeoutMs = 60000): Promise<any> => {
   const startTime = Date.now();
   let lastStatus = "";
@@ -1242,7 +1334,33 @@ app.get('/api/hunters', (req: Request, res: Response) => {
 });
 
 // OKX DEX API Endpoints
-// Get Swap Quote
+// Get Candlesticks (New Endpoint)
+app.get('/api/market/candles', asyncHandler(async (req: Request<{}, any, {}, { chainIndex: string; tokenContractAddress: string; bar?: string; after?: string; before?: string; limit?: string }>, res: Response) => {
+  const { chainIndex, tokenContractAddress, bar = "1m", after, before, limit = "100" } = req.query;
+
+  if (!chainIndex || !tokenContractAddress) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required parameters: chainIndex, tokenContractAddress",
+    });
+  }
+
+  try {
+    const candlesticks = await getOKXCandlesticks(chainIndex, tokenContractAddress, bar, after, before, limit);
+    res.json({
+      success: true,
+      data: candlesticks,
+    });
+  } catch (error) {
+    console.error("Error in /api/market/candles:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch candlestick data",
+    });
+  }
+}));
+
+// Get Swap Quote (Existing)
 app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount } = req.body;
 
@@ -1268,7 +1386,7 @@ app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromToke
   }
 }));
 
-// Execute Swap (Updated to try swap-instruction first, then fall back to swap)
+// Execute Swap (Existing)
 app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string; userAddress: string; slippage?: string; signedTx: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount, userAddress, slippage = "0.5", signedTx } = req.body;
 
@@ -1329,7 +1447,7 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
   }
 }));
 
-// Error handling middleware (Updated for better logging)
+// Error handling middleware (Existing)
 app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   console.error('Server error:', {
     message: error.message,
@@ -1348,7 +1466,7 @@ app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-// 404 handler (Existing)
+// 404 handler (Updated to include new endpoint)
 app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -1359,6 +1477,7 @@ app.use((req: Request, res: Response) => {
       'GET /api/health',
       'GET /api/hunters',
       'GET /api/status',
+      'GET /api/market/candles',
       'POST /api/scan/trigger',
       'POST /api/swap/quote',
       'POST /api/swap/execute',

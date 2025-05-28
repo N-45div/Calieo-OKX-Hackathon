@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
-
-
 interface CandlestickData {
     ts: number;
     o: number;
@@ -33,14 +31,6 @@ export default function ArbitrageOpportunities() {
     const [chainIndex, setChainIndex] = useState("1");
     const [customTokens, setCustomTokens] = useState("");
     const [timeframe, setTimeframe] = useState("1H");
-    
-    // API Configuration
-    const apiConfig = {
-        apiKey : "8374cd83-9b4a-4faf-b116-adb8fc07cb0e",
-        secretKey: "44cT@y683ZsvSLb",
-        apiPassphrase: "EE6C34274CB518F1B5C4CED4B0106C68",
-        projectId: "c38b1db0c8c646520faa9282dcf90717"
-    };
 
     // Default token addresses for different chains
     const defaultTokens = {
@@ -64,10 +54,7 @@ export default function ArbitrageOpportunities() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'OK-ACCESS-KEY': apiConfig.apiKey,
-                    'OK-ACCESS-SIGN': apiConfig.secretKey,
-                    'OK-ACCESS-PASSPHRASE': apiConfig.apiPassphrase,
-                    'OK-ACCESS-PROJECT': apiConfig.projectId,
+                    // Note: Authentication headers removed; this should be routed through the backend
                 },
                 body: JSON.stringify({
                     chainIndex: chainIndex,
@@ -84,7 +71,6 @@ export default function ArbitrageOpportunities() {
         } catch (error) {
             console.error('Error fetching batch token prices:', error);
             // Return mock data for demonstration
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             return tokenAddresses.map((address) => ({
                 chainIndex: chainIndex,
                 tokenContractAddress: address,
@@ -99,34 +85,35 @@ export default function ArbitrageOpportunities() {
 
     const fetchCandlestickData = async (tokenAddress: string) => {
         try {
-            const response = await fetch(
-                `https://web3.okx.com/api/v5/dex/market/candles?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}&bar=${timeframe}&limit=100`,
-                {
-                    headers: {
-                        'OK-ACCESS-KEY': apiConfig.apiKey,
-                        'OK-ACCESS-SIGN': apiConfig.secretKey,
-                        'OK-ACCESS-PASSPHRASE': apiConfig.apiPassphrase,
-                        'OK-ACCESS-PROJECT': apiConfig.projectId,
-                    }
-                }
-            );
+            // Call the backend endpoint instead of directly hitting the OKX API
+            const params = new URLSearchParams({
+                chainIndex,
+                tokenContractAddress: tokenAddress,
+                bar: timeframe,
+                limit: "100",
+            });
+
+            const response = await fetch(`/api/market/candles?${params.toString()}`);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
 
-            const data = await response.json();
-            
-            // Transform the array data to objects
-            const candlesticks = (data.data || []).map((candle: any[]) => ({
-                ts: parseInt(candle[0]),
-                o: parseFloat(candle[1]),
-                h: parseFloat(candle[2]),
-                l: parseFloat(candle[3]),
-                c: parseFloat(candle[4]),
-                vol: parseFloat(candle[5]),
-                volUsd: parseFloat(candle[6]),
-                confirm: parseInt(candle[7])
+            const result = await response.json();
+            if (!result.success) {
+                throw new Error(result.error || "Failed to fetch candlestick data");
+            }
+
+            // Transform the data to match CandlestickData interface
+            const candlesticks = (result.data || []).map((candle: CandlestickData) => ({
+                ts: candle.ts,
+                o: candle.o,
+                h: candle.h,
+                l: candle.l,
+                c: candle.c,
+                vol: candle.vol,
+                volUsd: candle.volUsd,
+                confirm: candle.confirm,
             }));
 
             return candlesticks;
@@ -242,7 +229,7 @@ export default function ArbitrageOpportunities() {
         price: candle.c,
         volume: candle.volUsd,
         high: candle.h,
-        low: candle.l
+        low: candle.l,
     }));
 
     return (
@@ -261,9 +248,9 @@ export default function ArbitrageOpportunities() {
                             onChange={(e) => setChainIndex(e.target.value)}
                             className="w-full p-2 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-blue-500"
                         >
-                            <option value="1">Solana</option>
-                            <option value="56">Ethereum</option>
-                            <option value="137">BSC</option>
+                            <option value="1">Ethereum</option>
+                            <option value="56">BSC</option>
+                            <option value="137">Polygon</option>
                         </select>
                     </div>
 
