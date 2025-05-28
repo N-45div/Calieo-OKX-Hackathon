@@ -143,58 +143,21 @@ interface OKXQuoteData {
   }>;
 }
 
-interface OKXSwapData {
-  routerResult: any;
-  chainIndex: string;
-  swapMode: string;
-  fromTokenAmount: string;
-  toTokenAmount: string;
-  tradeFee: string;
-  estimateGasFee: string;
-  dexRouterList: Array<{
-    router: string;
-    routerPercent: string;
-    subRouterList: Array<{
-      dexProtocol: string[];
-      dexName: string;
-      percent: string;
-    }>;
-  }>;
-  fromToken: {
-    tokenContractAddress: string;
-    tokenSymbol: string;
-    tokenUnitPrice: string | null;
-    decimal: string;
-    isHoneyPot: boolean;
-    taxRate: string;
-  };
-  toToken: {
-    tokenContractAddress: string;
-    tokenSymbol: string;
-    tokenUnitPrice: string | null;
-    decimal: string;
-    isHoneyPot: boolean;
-    taxRate: string;
-  };
-  quoteCompareList: Array<{
-    dexName: string;
-    dexLogo: string;
-    tradeFee: string;
-    amountOut: string;
-    priceImpactPercentage: string;
-  }>;
-  tx: {
-    signatureData?: string[];
-    from: string;
-    gas: string;
-    gasPrice: string;
-    maxPriorityFeePerGas: string;
-    to: string;
-    value: string;
-    minReceiveAmount: string;
-    data: string;
-    slippage: string;
-  };
+interface OKXSwapInstructionAccount {
+  pubkey: string;
+  isSigner: boolean;
+  isWritable: boolean;
+}
+
+interface OKXSwapInstruction {
+  data: string;
+  accounts: OKXSwapInstructionAccount[];
+  programId: string;
+}
+
+interface OKXSwapInstructionsData {
+  addressLookupTableAccount: string[];
+  instructionLists: OKXSwapInstruction[];
 }
 
 interface SwapResult {
@@ -819,16 +782,16 @@ const getOKXSwapQuote = async (
   }
 };
 
-// Fetch Swap Data from OKX DEX
-const getOKXSwapData = async (
+// Fetch Swap Instructions from OKX DEX (New)
+const getOKXSwapInstructions = async (
   fromTokenAddress: string,
   toTokenAddress: string,
   amount: string,
   userAddress: string,
   slippage = "0.5"
-): Promise<OKXSwapData> => {
+): Promise<OKXSwapInstructionsData> => {
   const timestamp = new Date().toISOString();
-  const path = `dex/aggregator/swap`;
+  const path = `dex/aggregator/swap-instruction`;
   const requestPath = `/api/v5/${path}`;
 
   const params: Record<string, string> = {
@@ -840,6 +803,7 @@ const getOKXSwapData = async (
     slippage,
     userWalletAddress: userAddress,
     priceImpactProtectionPercentage: "0.9",
+    computeUnitLimit: "300000", // Set a reasonable compute unit limit
   };
 
   const queryString = "?" + new URLSearchParams(params).toString();
@@ -851,18 +815,18 @@ const getOKXSwapData = async (
       timeout: 20000,
     });
 
-    console.log("OKX API Response for Swap:", response.data);
+    console.log("OKX API Response for Swap Instructions:", response.data);
 
     if (response.data.code !== "0" || !response.data.data?.[0]) {
-      throw new Error(`Swap API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+      throw new Error(`Swap Instructions API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
     }
 
-    const swapData = response.data.data[0];
-    if (!swapData.tx || !swapData.tx.data) {
-      throw new Error("Invalid swap transaction data received from API");
+    const swapInstructions = response.data.data[0];
+    if (!swapInstructions.instructionLists || !Array.isArray(swapInstructions.instructionLists)) {
+      throw new Error("Invalid swap instructions data received from API");
     }
 
-    return swapData;
+    return swapInstructions;
   } catch (error) {
     if (axios.isAxiosError(error)) {
       console.error("OKX API Error:", {
@@ -876,7 +840,7 @@ const getOKXSwapData = async (
   }
 };
 
-// Broadcast Transaction via OKX DEX (Updated)
+// Broadcast Transaction via OKX DEX
 const broadcastOKXTransaction = async (signedTx: string, userAddress: string): Promise<string> => {
   const path = `dex/pre-transaction/broadcast-transaction`;
   const requestPath = `/api/v5/${path}`;
@@ -884,7 +848,7 @@ const broadcastOKXTransaction = async (signedTx: string, userAddress: string): P
   const broadcastData = {
     signedTx,
     chainIndex: SOLANA_CHAIN_INDEX,
-    address: userAddress, // Added userAddress as the 'address' field
+    address: userAddress,
   };
 
   const bodyString = JSON.stringify(broadcastData);
@@ -1157,7 +1121,7 @@ app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromToke
   }
 }));
 
-// Execute Swap (Updated to handle "pending" case)
+// Execute Swap (Updated to use swap-instruction endpoint)
 app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string; userAddress: string; slippage?: string; signedTx: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount, userAddress, slippage = "0.5", signedTx } = req.body;
 
@@ -1169,19 +1133,14 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
   }
 
   try {
-    // Step 1: Get swap data
-    const swapData = await getOKXSwapData(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
-    const callData = swapData.tx.data;
+    // Step 1: Get swap instructions
+    const swapInstructions = await getOKXSwapInstructions(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
 
-    if (!callData) {
-      throw new Error("Invalid transaction data received from API");
-    }
-
-    // If signedTx is "pending", return the swap data for the frontend to sign
+    // If signedTx is "pending", return the swap instructions for the frontend to construct the transaction
     if (signedTx === "pending") {
       res.json({
         success: true,
-        data: swapData,
+        data: swapInstructions,
       });
       return;
     }
