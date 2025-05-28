@@ -39,10 +39,10 @@ The app leverages the following technologies:
 
 - `src/lib/solana-swap.ts`: Handles OKX DEX API integration and Solana token swaps  
 - `src/lib/sentimentAnalysis.ts`: Performs sentiment analysis using Google Generative AI API  
-- `src/ArbitrageOpportunities.tsx`: Displays arbitrage opportunities with candlestick charts  
-- `src/SolanaAlphaHunter.tsx`: UI for alpha hunting, showing newly deployed contracts  
+- `src/components/Arbitrage.tsx`: Displays arbitrage opportunities with candlestick charts  
+- `src/components/KOLAnalysis.tsx`: UI for alpha hunting, showing newly deployed contracts  
 - `src/App.tsx`: Main routing and UI layout for the Telegram Mini App  
-- `src/SwapForm.tsx`: Form logic for token swapping  
+- `src/components/SwapForm.tsx`: Form logic for token swapping  
 - `backend/index.ts`: Backend WebSocket server for alpha hunting and Twitter scanning  
 - `.env`: Stores API keys and configuration variables  
 
