@@ -12,7 +12,7 @@ import { solana, solanaTestnet, solanaDevnet } from "@reown/appkit/networks";
 
 
 // Initialize Solana Connection
-const connection = new Connection("https://api.mainnet-beta.solana.com", {
+const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb", {
   confirmTransactionInitialTimeout: 30000,
 });
 

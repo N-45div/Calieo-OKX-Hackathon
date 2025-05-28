@@ -10,7 +10,7 @@ import base58 from "bs58";
 const BACKEND_API_URL = "http://localhost:3001"; // Update this if your backend is hosted elsewhere
 
 // Solana Connection
-const connection = new Connection("https://api.mainnet-beta.solana.com", {
+const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb", {
   confirmTransactionInitialTimeout: 30000,
 });
 

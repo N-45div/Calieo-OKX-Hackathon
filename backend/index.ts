@@ -29,7 +29,7 @@ app.use(express.json());
 
 // Configuration
 const TWITTER_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAAFxqzQEAAAAAZPRCRDTeJ8uOt56coy0%2F3kmTZwo%3DtEwps4FR9lNh8DKt4C6rqGcGZ9b34n1GoN8fTX1bXzd0xgzW5e";
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
 // OKX DEX API Configuration (from solana-swap.ts)
