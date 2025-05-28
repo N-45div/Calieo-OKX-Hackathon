@@ -1,18 +1,16 @@
 import { useState, useEffect } from "react";
-import { useAppKitAccount } from "@reown/appkit/react";
+import { useAppKitAccount, useAppKitProvider } from "@reown/appkit/react";
 import type { Provider } from "@reown/appkit-adapter-solana/react";
+import { useAppKitConnection } from "@reown/appkit-adapter-solana/react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import axios from "axios";
-import { Connection, Transaction, VersionedTransaction, ComputeBudgetProgram, PublicKey } from "@solana/web3.js";
+import { VersionedTransaction, ComputeBudgetProgram, PublicKey, MessageV0, TransactionInstruction } from "@solana/web3.js";
 import base58 from "bs58";
 
 // Backend API URL (adjust based on your backend deployment)
-const BACKEND_API_URL = "http://localhost:3001"; // Update this if your backend is hosted elsewhere
+const BACKEND_API_URL = "http://localhost:3001";
 
 // Solana Connection
-const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb", {
-  confirmTransactionInitialTimeout: 30000,
-});
 
 interface SwapFormProps {
   walletProvider?: Provider;
@@ -41,8 +39,11 @@ interface SwapResult {
   error?: string;
 }
 
-export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
-  const { isConnected } = useAppKitAccount();
+export default function SwapForm({ balance }: SwapFormProps) {
+  const { isConnected, address } = useAppKitAccount();
+  const { connection } = useAppKitConnection();
+  const { walletProvider } = useAppKitProvider<Provider>("solana");
+
   const [fromTokenAddress, setFromTokenAddress] = useState<string>("So11111111111111111111111111111111111111112"); // SOL
   const [toTokenAddress, setToTokenAddress] = useState<string>("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); // USDC
   const [amount, setAmount] = useState<string>("");
@@ -51,6 +52,11 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
   const [swapResult, setSwapResult] = useState<SwapResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Debug wallet connection state
+  useEffect(() => {
+    console.log("Wallet connected:", isConnected, "Address:", address, "Provider:", walletProvider);
+  }, [isConnected, address, walletProvider]);
 
   // Fetch quote when tokens or amount change
   useEffect(() => {
@@ -64,7 +70,7 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
       setError(null);
 
       try {
-        const decimals = fromTokenAddress === "So11111111111111111111111111111111111111112" ? 9 : 6; // SOL: 9 decimals, USDC: 6 decimals
+        const decimals = fromTokenAddress === "So11111111111111111111111111111111111111112" ? 9 : 6;
         const amountInUnits = (parseFloat(amount) * Math.pow(10, decimals)).toString();
         
         const response = await axios.post(`${BACKEND_API_URL}/api/swap/quote`, {
@@ -92,6 +98,9 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
   // Get priority fee for Solana transaction
   const getPriorityFee = async (): Promise<number> => {
     try {
+      if (!connection) {
+        throw new Error("Solana connection is not available.");
+      }
       const recentFees = await connection.getRecentPrioritizationFees();
       const maxFee = Math.max(...recentFees.map(fee => fee.prioritizationFee), 10000);
       return Math.min(maxFee * 2, 100000);
@@ -101,47 +110,119 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
     }
   };
 
-  // Prepare transaction for signing
-  const prepareTransaction = async (callData: string, userAddress: string): Promise<Transaction | VersionedTransaction> => {
+  // Prepare transaction for signing (Updated to handle MessageV0)
+  const prepareTransaction = async (callData: string, userAddress: string): Promise<VersionedTransaction> => {
     try {
       const decodedTransaction = base58.decode(callData);
+      if (!connection) {
+        throw new Error("Solana connection is not available.");
+      }
       const recentBlockhash = await connection.getLatestBlockhash('confirmed');
-      const userPublicKey = new PublicKey(userAddress);
 
-      let tx: Transaction | VersionedTransaction;
-      try {
-        tx = VersionedTransaction.deserialize(decodedTransaction);
-        tx.message.recentBlockhash = recentBlockhash.blockhash;
-      } catch {
-        tx = Transaction.from(decodedTransaction);
-        tx.recentBlockhash = recentBlockhash.blockhash;
-      }
+      const tx = VersionedTransaction.deserialize(decodedTransaction);
+      const message = tx.message;
 
-      if (tx instanceof Transaction) {
-        tx.feePayer = userPublicKey;
+      // Add compute budget and priority fee instructions
+      const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+        units: 300000,
+      });
+      const priorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: await getPriorityFee(),
+      });
 
-        const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
-          units: 300000,
+      // Check if the message is a MessageV0 (modern versioned message)
+      if ('version' in message && message.version === 0) {
+        const messageV0 = message as MessageV0;
+
+        // Combine existing instructions with new instructions
+        const allInstructions: TransactionInstruction[] = [
+          computeBudgetIx,
+          priorityFeeIx,
+          ...messageV0.compiledInstructions.map((compiledIx) => {
+            return new TransactionInstruction({
+              keys: compiledIx.accountKeyIndexes.map((idx) => {
+                const pubkey = messageV0.staticAccountKeys[idx];
+                return {
+                  pubkey,
+                  isSigner: messageV0.isAccountSigner(idx),
+                  isWritable: messageV0.isAccountWritable(idx),
+                };
+              }),
+              programId: messageV0.staticAccountKeys[compiledIx.programIdIndex],
+              data: Buffer.from(compiledIx.data),
+            });
+          }),
+        ];
+
+        // Create a new MessageV0 with the updated instructions
+        const newMessageV0 = MessageV0.compile({
+          payerKey: new PublicKey(userAddress),
+          instructions: allInstructions,
+          recentBlockhash: recentBlockhash.blockhash,
+          addressLookupTableAccounts: [], // Add LUT accounts if needed
         });
-        const priorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({
-          microLamports: await getPriorityFee(),
-        });
 
-        tx.add(computeBudgetIx, priorityFeeIx);
+        // Create a new VersionedTransaction with the updated message
+        const newTx = new VersionedTransaction(newMessageV0);
+        return newTx;
       } else {
-        console.log("VersionedTransaction detected; ensuring fee payer is user.");
+        throw new Error("Unsupported message version. Expected MessageV0.");
       }
-
-      return tx;
     } catch (error) {
       console.error("Error preparing transaction:", error);
-      throw new Error("Failed to prepare transaction for signing");
+      throw new Error("Failed to prepare transaction for signing: " + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
+  // Fetch swap data from backend
+  const fetchSwapData = async (fromTokenAddress: string, toTokenAddress: string, amount: string, userAddress: string, slippage: string) => {
+    try {
+      const response = await axios.post(`${BACKEND_API_URL}/api/swap/execute`, {
+        fromTokenAddress,
+        toTokenAddress,
+        amount,
+        userAddress,
+        slippage,
+        signedTx: "pending", // Placeholder to get swap data
+      });
+
+      if (!response.data.success || !response.data.data) {
+        throw new Error(response.data.error || "Failed to fetch swap data");
+      }
+
+      return response.data.data;
+    } catch (error) {
+      console.error("Error fetching swap data:", error);
+      throw error;
+    }
+  };
+
+  // Execute swap with signed transaction
+  const executeSwap = async (fromTokenAddress: string, toTokenAddress: string, amount: string, userAddress: string, slippage: string, signedTx: string) => {
+    try {
+      const response = await axios.post(`${BACKEND_API_URL}/api/swap/execute`, {
+        fromTokenAddress,
+        toTokenAddress,
+        amount,
+        userAddress,
+        slippage,
+        signedTx,
+      });
+
+      if (!response.data.success) {
+        throw new Error(response.data.error || "Swap execution failed");
+      }
+
+      return response.data.data;
+    } catch (error) {
+      console.error("Error executing swap:", error);
+      throw error;
     }
   };
 
   // Handle swap execution
   const handleSwap = async () => {
-    if (!isConnected || !walletProvider || !amount || !fromTokenAddress || !toTokenAddress) {
+    if (!isConnected || !walletProvider || !address || !amount || !fromTokenAddress || !toTokenAddress) {
       setError("Please connect wallet and fill in all fields");
       return;
     }
@@ -151,8 +232,11 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
       return;
     }
 
-    if (!walletProvider.publicKey) {
-      setError("Wallet public key is not available");
+    // Check balance
+    const balanceInLamports = parseFloat(balance) * Math.pow(10, 9);
+    const amountInLamports = parseFloat(amount) * Math.pow(10, 9);
+    if (amountInLamports > balanceInLamports) {
+      setError("Insufficient balance for the swap.");
       return;
     }
 
@@ -161,51 +245,49 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
     setSwapResult(null);
 
     try {
-      const userAddress = walletProvider.publicKey.toString();
-      const decimals = fromTokenAddress === "So11111111111111111111111111111111111111112" ? 9 : 6; // SOL: 9 decimals, USDC: 6 decimals
+      const userAddress = address;
+      const decimals = fromTokenAddress === "So11111111111111111111111111111111111111112" ? 9 : 6;
       const amountInUnits = (parseFloat(amount) * Math.pow(10, decimals)).toString();
 
-      // Step 1: Get swap data from backend
-      const swapResponse = await axios.post(`${BACKEND_API_URL}/api/swap/execute`, {
-        fromTokenAddress,
-        toTokenAddress,
-        amount: amountInUnits,
-        userAddress,
-        slippage,
-        signedTx: "pending", // Placeholder, will be replaced after signing
-      });
-
-      if (!swapResponse.data.success || !swapResponse.data.data) {
-        throw new Error(swapResponse.data.error || "Failed to fetch swap data");
-      }
-
-      const swapData = swapResponse.data.data;
+      // Step 1: Fetch swap data from backend
+      console.log("Fetching swap data...");
+      const swapData = await fetchSwapData(fromTokenAddress, toTokenAddress, amountInUnits, userAddress, slippage);
       const callData = swapData.tx.data;
 
       if (!callData) {
         throw new Error("Invalid transaction data received from API");
       }
 
-      // Step 2: Prepare and sign the transaction
+      // Step 2: Prepare the transaction
+      console.log("Preparing transaction...");
       const transaction = await prepareTransaction(callData, userAddress);
-      await walletProvider.sendTransaction(transaction, connection);
-      const signedTx = base58.encode(transaction.serialize());
 
-      // Step 3: Execute the swap with the signed transaction
-      const executeResponse = await axios.post(`${BACKEND_API_URL}/api/swap/execute`, {
+      // Step 3: Sign and send the transaction
+      console.log("Sending transaction to wallet for signing...");
+      if (!connection) {
+        throw new Error("Solana connection is not available.");
+      }
+      const signature = await walletProvider.sendTransaction(transaction, connection, {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
+      });
+      console.log("Transaction signed, signature:", signature);
+
+      // Step 4: Serialize the signed transaction for the backend
+      const signedTx = base58.encode(transaction.serialize());
+      console.log("Serialized signed transaction:", signedTx);
+
+      // Step 5: Execute the swap with the signed transaction
+      console.log("Executing swap with signed transaction...");
+      const { orderId, txHash, status } = await executeSwap(
         fromTokenAddress,
         toTokenAddress,
-        amount: amountInUnits,
+        amountInUnits,
         userAddress,
         slippage,
-        signedTx,
-      });
+        signedTx
+      );
 
-      if (!executeResponse.data.success) {
-        throw new Error(executeResponse.data.error || "Swap execution failed");
-      }
-
-      const { orderId, txHash, status } = executeResponse.data.data;
       setSwapResult({
         success: true,
         orderId,
@@ -213,7 +295,19 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
         status,
       });
     } catch (err) {
-      setError("Swap failed. You may need to sign the transaction with your wallet.");
+      if (err instanceof Error) {
+        if (err.message.includes("User rejected")) {
+          setError("Swap failed: You rejected the transaction in your wallet.");
+        } else if (err.message.includes("blockhash")) {
+          setError("Swap failed: Transaction blockhash is stale. Please try again.");
+        } else if (err.message.includes("insufficient")) {
+          setError("Swap failed: Insufficient funds or balance for the transaction.");
+        } else {
+          setError(`Swap failed: ${err.message}`);
+        }
+      } else {
+        setError("Swap failed: An unexpected error occurred.");
+      }
       console.error("Swap error:", err);
     } finally {
       setLoading(false);

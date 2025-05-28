@@ -8,7 +8,7 @@ import { Connection, PublicKey, TokenAmount, TokenAccountBalancePair } from '@so
 import cron from 'node-cron';
 import dotenv from 'dotenv';
 import CryptoJS from 'crypto-js';
-
+import base58 from 'bs58';
 
 dotenv.config();
 
@@ -28,17 +28,18 @@ app.use(cors());
 app.use(express.json());
 
 // Configuration
-const TWITTER_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAAFxqzQEAAAAAZPRCRDTeJ8uOt56coy0%2F3kmTZwo%3DtEwps4FR9lNh8DKt4C6rqGcGZ9b34n1GoN8fTX1bXzd0xgzW5e";
+const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN || "AAAAAAAAAAAAAAAAAAAAAFxqzQEAAAAAZPRCRDTeJ8uOt56coy0%2F3kmTZwo%3DtEwps4FR9lNh8DKt4C6rqGcGZ9b34n1GoN8fTX1bXzd0xgzW5e";
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
-// OKX DEX API Configuration (from solana-swap.ts)
-const OKX_API_KEY = "8374cd83-9b4a-4faf-b116-adb8fc07cb0e";
-const OKX_SECRET_KEY = "44cT@y683ZsvSLb";
-const OKX_API_PASSPHRASE = "EE6C34274CB518F1B5C4CED4B0106C68";
-const OKX_PROJECT_ID = "c38b1db0c8c646520faa9282dcf90717";
+// OKX DEX API Configuration
+const OKX_API_KEY = process.env.OKX_API_KEY || "89741cb9-fa03-49b6-a6db-5b974a5f8fdf";
+const OKX_SECRET_KEY = process.env.OKX_SECRET_KEY || "6E769FF4CC4C695D9E91D216424D648A";
+const OKX_API_PASSPHRASE = process.env.OKX_API_PASSPHRASE || "Suresh@23";
+const OKX_PROJECT_ID = process.env.OKX_PROJECT_ID || "c38b1db0c8c646520faa9282dcf90717";
 const OKX_BASE_URL = "https://web3.okx.com";
-const SOLANA_CHAIN_ID = "501"; // Solana Mainnet
+const SOLANA_CHAIN_INDEX = "501"; // Solana Mainnet chainIndex (verify with OKX docs)
+const SOLANA_CHAIN_ID = "501"; // Deprecated chainId, included for backward compatibility
 
 // Interfaces (Existing)
 interface Tweet {
@@ -726,7 +727,7 @@ const performScan = async (): Promise<void> => {
   }
 };
 
-// OKX DEX API Helper Functions (New)
+// OKX DEX API Helper Functions (Updated)
 const getOKXHeaders = (timestamp: string, method: string, requestPath: string, queryString = "", body = ""): Record<string, string> => {
   if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_API_PASSPHRASE || !OKX_PROJECT_ID) {
     throw new Error("Missing required environment variables for OKX API authentication");
@@ -758,26 +759,41 @@ const getOKXSwapQuote = async (
   const requestPath = `/api/v5/${path}`;
 
   const params: Record<string, string> = {
-    chainIndex: SOLANA_CHAIN_ID,
+    chainIndex: SOLANA_CHAIN_INDEX,
+    chainId: SOLANA_CHAIN_ID,
     amount,
     fromTokenAddress,
     toTokenAddress,
-    priceImpactProtectionPercentage: "0.9", // 90% default
+    priceImpactProtectionPercentage: "0.9",
   };
 
   const queryString = "?" + new URLSearchParams(params).toString();
   const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
 
-  const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
-    headers,
-    timeout: 15000,
-  });
+  try {
+    const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+      headers,
+      timeout: 15000,
+    });
 
-  if (response.data.code !== "0" || !response.data.data?.[0]) {
-    throw new Error(`Failed to get quote: ${response.data.msg || "Unknown error"}`);
+    console.log("OKX API Response for Quote:", response.data);
+
+    if (response.data.code !== "0" || !response.data.data?.[0]) {
+      throw new Error(`Failed to get quote: ${response.data.msg || "Unknown error"}`);
+    }
+
+    return response.data.data[0];
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.error("OKX API Error:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+      throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+    }
+    throw error;
   }
-
-  return response.data.data[0];
 };
 
 // Fetch Swap Data from OKX DEX
@@ -793,7 +809,8 @@ const getOKXSwapData = async (
   const requestPath = `/api/v5/${path}`;
 
   const params: Record<string, string> = {
-    chainIndex: SOLANA_CHAIN_ID,
+    chainIndex: SOLANA_CHAIN_INDEX,
+    chainId: SOLANA_CHAIN_ID,
     fromTokenAddress,
     toTokenAddress,
     amount,
@@ -805,46 +822,75 @@ const getOKXSwapData = async (
   const queryString = "?" + new URLSearchParams(params).toString();
   const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
 
-  const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
-    headers,
-    timeout: 20000,
-  });
+  try {
+    const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+      headers,
+      timeout: 20000,
+    });
 
-  if (response.data.code !== "0" || !response.data.data?.[0]) {
-    throw new Error(`Swap API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+    console.log("OKX API Response for Swap:", response.data);
+
+    if (response.data.code !== "0" || !response.data.data?.[0]) {
+      throw new Error(`Swap API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+    }
+
+    const swapData = response.data.data[0];
+    if (!swapData.tx || !swapData.tx.data) {
+      throw new Error("Invalid swap transaction data received from API");
+    }
+
+    return swapData;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.error("OKX API Error:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+      throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+    }
+    throw error;
   }
-
-  const swapData = response.data.data[0];
-  if (!swapData.tx || !swapData.tx.data) {
-    throw new Error("Invalid swap transaction data received from API");
-  }
-
-  return swapData;
 };
 
-// Broadcast Transaction via OKX DEX
-const broadcastOKXTransaction = async (signedTx: string): Promise<string> => {
+// Broadcast Transaction via OKX DEX (Updated)
+const broadcastOKXTransaction = async (signedTx: string, userAddress: string): Promise<string> => {
   const path = `dex/pre-transaction/broadcast-transaction`;
   const requestPath = `/api/v5/${path}`;
 
   const broadcastData = {
     signedTx,
-    chainIndex: SOLANA_CHAIN_ID,
+    chainIndex: SOLANA_CHAIN_INDEX,
+    address: userAddress, // Added userAddress as the 'address' field
   };
 
   const bodyString = JSON.stringify(broadcastData);
   const timestamp = new Date().toISOString();
   const headers = getOKXHeaders(timestamp, "POST", requestPath, "", bodyString);
 
-  const response = await axios.post(`${OKX_BASE_URL}${requestPath}`, broadcastData, {
-    headers,
-    timeout: 20000,
-  });
+  try {
+    const response = await axios.post(`${OKX_BASE_URL}${requestPath}`, broadcastData, {
+      headers,
+      timeout: 20000,
+    });
 
-  if (response.data.code === "0" && response.data.data?.[0]?.orderId) {
-    return response.data.data[0].orderId;
-  } else {
-    throw new Error(`Broadcast failed: ${response.data.msg || "Unknown error"}`);
+    console.log("OKX API Response for Broadcast:", response.data);
+
+    if (response.data.code === "0" && response.data.data?.[0]?.orderId) {
+      return response.data.data[0].orderId;
+    } else {
+      throw new Error(`Broadcast failed: ${response.data.msg || "Unknown error"}`);
+    }
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.error("OKX API Error:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+      throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+    }
+    throw error;
   }
 };
 
@@ -859,7 +905,7 @@ const trackOKXTransaction = async (orderId: string, intervalMs = 5000, timeoutMs
 
     const params = {
       orderId,
-      chainIndex: SOLANA_CHAIN_ID,
+      chainIndex: SOLANA_CHAIN_INDEX,
       limit: "1",
     };
 
@@ -867,25 +913,39 @@ const trackOKXTransaction = async (orderId: string, intervalMs = 5000, timeoutMs
     const timestamp = new Date().toISOString();
     const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
 
-    const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
-      headers,
-      timeout: 10000,
-    });
+    try {
+      const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+        headers,
+        timeout: 10000,
+      });
 
-    if (response.data.code === "0" && response.data.data && response.data.data.length > 0) {
-      if (response.data.data[0].orders && response.data.data[0].orders.length > 0) {
-        const txData = response.data.data[0];
-        const status = txData.orders[0].txStatus;
+      console.log("OKX API Response for Transaction Tracking:", response.data);
 
-        if (status !== lastStatus) {
-          lastStatus = status;
-          if (status === "2") { // Success
-            return txData;
-          } else if (status === "3") { // Failed
-            throw new Error(`Transaction failed: ${txData.orders[0].failReason || "Unknown reason"}`);
+      if (response.data.code === "0" && response.data.data && response.data.data.length > 0) {
+        if (response.data.data[0].orders && response.data.data[0].orders.length > 0) {
+          const txData = response.data.data[0];
+          const status = txData.orders[0].txStatus;
+
+          if (status !== lastStatus) {
+            lastStatus = status;
+            if (status === "2") { // Success
+              return txData;
+            } else if (status === "3") { // Failed
+              throw new Error(`Transaction failed: ${txData.orders[0].failReason || "Unknown reason"}`);
+            }
           }
         }
       }
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        console.error("OKX API Error during transaction tracking:", {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+        });
+        throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+      }
+      throw error;
     }
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
@@ -1066,6 +1126,7 @@ app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromToke
       data: quote,
     });
   } catch (error) {
+    console.error("Error in /api/swap/quote:", error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to fetch swap quote",
@@ -1073,7 +1134,7 @@ app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromToke
   }
 }));
 
-// Execute Swap
+// Execute Swap (Updated)
 app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string; userAddress: string; slippage?: string; signedTx: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount, userAddress, slippage = "0.5", signedTx } = req.body;
 
@@ -1085,7 +1146,7 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
   }
 
   try {
-    // Step 1: Get swap data (already done on frontend, but we can validate here if needed)
+    // Step 1: Get swap data
     const swapData = await getOKXSwapData(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
     const callData = swapData.tx.data;
 
@@ -1093,8 +1154,8 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
       throw new Error("Invalid transaction data received from API");
     }
 
-    // Step 2: Broadcast the signed transaction
-    const orderId = await broadcastOKXTransaction(signedTx);
+    // Step 2: Broadcast the signed transaction with userAddress
+    const orderId = await broadcastOKXTransaction(signedTx, userAddress);
 
     // Step 3: Track the transaction
     const txStatus = await trackOKXTransaction(orderId);
@@ -1108,6 +1169,7 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
       },
     });
   } catch (error) {
+    console.error("Error in /api/swap/execute:", error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to execute swap",
@@ -1136,7 +1198,7 @@ app.use((req: Request, res: Response) => {
       'GET /api/health',
       'GET /api/hunters',
       'GET /api/status',
-      'POST /api/scan/trigger',
+      'POST /api/swap/trigger',
       'POST /api/swap/quote',
       'POST /api/swap/execute',
     ]
