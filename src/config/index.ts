@@ -1,39 +1,24 @@
-import { solana, solanaTestnet, solanaDevnet } from '@reown/appkit/networks';
-import type { AppKitNetwork } from '@reown/appkit/networks';
-import { SolanaAdapter } from '@reown/appkit-adapter-solana/react';
+import { solana, solanaTestnet, solanaDevnet } from '@reown/appkit/networks'
+import type { AppKitNetwork } from '@reown/appkit/networks'
+import { SolanaAdapter } from '@reown/appkit-adapter-solana/react'
+
 
 // Get projectId from https://cloud.reown.com
-export const projectId = import.meta.env.VITE_PROJECT_ID || "b56e18d47c72ab683b10814fe9495694"; // Public projectId for localhost
+export const projectId = "341513fbc5462fa836977524eba17c23" // this is a public projectId only to use on localhost
 
 if (!projectId) {
-  throw new Error('Project ID is not defined');
+  throw new Error('Project ID is not defined')
 }
 
-// Create a metadata object
+// Create a metadata object - optional
 export const metadata = {
-  name: 'Calieo',
-  description: 'Next-Gen DeFi Protocol',
-  url: 'http://localhost:5173', // Must match your domain & subdomain
-  icons: ['https://avatars.githubusercontent.com/u/179229932'], // Use a valid icon URL
-};
+  name: 'AppKit',
+  description: 'AppKit Example',
+  url: 'https://localhost:5173', // origin must match your domain & subdomain
+  icons: ['https://avatars.githubusercontent.com/u/179229932']
+}
 
-// Configure the Solana networks with a custom RPC endpoint
-const customSolanaNetwork: AppKitNetwork = {
-  ...solana,
-  rpcUrls: {
-    default: {
-      http: ["https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb"],
-    },
-  },
-};
+export const networks: [AppKitNetwork, ...AppKitNetwork[]] = [solana, solanaTestnet, solanaDevnet]
 
-export const networks: [AppKitNetwork, ...AppKitNetwork[]] = [customSolanaNetwork, solanaTestnet, solanaDevnet];
-
-// Set up Solana Adapter with a default RPC endpoint
-export const solanaWeb3JsAdapter = new SolanaAdapter({
-  rpc: {
-    [solana.chainId]: "https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb",
-    [solanaTestnet.chainId]: solanaTestnet.rpcUrls.default.http[0],
-    [solanaDevnet.chainId]: solanaDevnet.rpcUrls.default.http[0],
-  },
-});
+// Set up Solana Adapter
+export const solanaWeb3JsAdapter = new SolanaAdapter()

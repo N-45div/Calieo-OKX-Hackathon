@@ -7,6 +7,8 @@ import http from 'http';
 import { Connection, PublicKey, TokenAmount, TokenAccountBalancePair } from '@solana/web3.js';
 import cron from 'node-cron';
 import dotenv from 'dotenv';
+import CryptoJS from 'crypto-js';
+
 
 dotenv.config();
 
@@ -30,7 +32,15 @@ const TWITTER_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAAFxqzQEAAAAAZPRCRDTeJ8uOt56coy
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
-// Interfaces
+// OKX DEX API Configuration (from solana-swap.ts)
+const OKX_API_KEY = "8374cd83-9b4a-4faf-b116-adb8fc07cb0e";
+const OKX_SECRET_KEY = "44cT@y683ZsvSLb";
+const OKX_API_PASSPHRASE = "EE6C34274CB518F1B5C4CED4B0106C68";
+const OKX_PROJECT_ID = "c38b1db0c8c646520faa9282dcf90717";
+const OKX_BASE_URL = "https://web3.okx.com";
+const SOLANA_CHAIN_ID = "501"; // Solana Mainnet
+
+// Interfaces (Existing)
 interface Tweet {
   id: string;
   text: string;
@@ -40,7 +50,7 @@ interface Tweet {
     retweet_count: number;
   };
   username: string;
-  author_id?: string; // Added for Twitter API v2 expansions
+  author_id?: string;
 }
 
 interface DexData {
@@ -91,12 +101,115 @@ interface Contract {
   dexData: DexData | null;
 }
 
-// In-memory storage
+// New Interfaces for OKX DEX API
+interface OKXQuoteData {
+  chainIndex: string;
+  fromTokenAmount: string;
+  toTokenAmount: string;
+  tradeFee: string;
+  estimateGasFee: string;
+  dexRouterList: Array<{
+    router: string;
+    routerPercent: string;
+    subRouterList: Array<{
+      dexProtocol: string[];
+      dexName: string;
+      percent: string;
+    }>;
+  }>;
+  fromToken: {
+    tokenContractAddress: string;
+    tokenSymbol: string;
+    tokenUnitPrice: string | null;
+    decimal: string;
+    isHoneyPot: boolean;
+    taxRate: string;
+  };
+  toToken: {
+    tokenContractAddress: string;
+    tokenSymbol: string;
+    tokenUnitPrice: string | null;
+    decimal: string;
+    isHoneyPot: boolean;
+    taxRate: string;
+  };
+  quoteCompareList: Array<{
+    dexName: string;
+    dexLogo: string;
+    tradeFee: string;
+    amountOut: string;
+    priceImpactPercentage: string;
+  }>;
+}
+
+interface OKXSwapData {
+  routerResult: any;
+  chainIndex: string;
+  swapMode: string;
+  fromTokenAmount: string;
+  toTokenAmount: string;
+  tradeFee: string;
+  estimateGasFee: string;
+  dexRouterList: Array<{
+    router: string;
+    routerPercent: string;
+    subRouterList: Array<{
+      dexProtocol: string[];
+      dexName: string;
+      percent: string;
+    }>;
+  }>;
+  fromToken: {
+    tokenContractAddress: string;
+    tokenSymbol: string;
+    tokenUnitPrice: string | null;
+    decimal: string;
+    isHoneyPot: boolean;
+    taxRate: string;
+  };
+  toToken: {
+    tokenContractAddress: string;
+    tokenSymbol: string;
+    tokenUnitPrice: string | null;
+    decimal: string;
+    isHoneyPot: boolean;
+    taxRate: string;
+  };
+  quoteCompareList: Array<{
+    dexName: string;
+    dexLogo: string;
+    tradeFee: string;
+    amountOut: string;
+    priceImpactPercentage: string;
+  }>;
+  tx: {
+    signatureData?: string[];
+    from: string;
+    gas: string;
+    gasPrice: string;
+    maxPriorityFeePerGas: string;
+    to: string;
+    value: string;
+    minReceiveAmount: string;
+    data: string;
+    slippage: string;
+  };
+}
+
+interface SwapResult {
+  success: boolean;
+  orderId?: string;
+  txHash?: string;
+  status?: string;
+  error?: string;
+}
+
+// In-memory storage (Existing)
 let contractsCache: Contract[] = [];
 let lastScanTime: Date | null = null;
 let scanInProgress = false;
 
-// Alpha hunters to monitor (Twitter usernames)
+// Alpha hunters to monitor (Existing)
 const ALPHA_HUNTERS: string[] = [
   'degenspartan',
   'SolBigBrain',
@@ -116,18 +229,16 @@ const ALPHA_HUNTERS: string[] = [
   'SolanaFloor'
 ];
 
-// WebSocket connection handling
+// WebSocket connection handling (Existing)
 io.on('connection', (socket: Socket) => {
   console.log(`Client connected: ${socket.id}`);
 
-  // Send current data to new client
   socket.emit('contracts-update', {
     contracts: contractsCache,
     lastUpdate: lastScanTime,
     totalClients: io.engine.clientsCount
   });
 
-  // Send scan status
   socket.emit('scan-status', {
     inProgress: scanInProgress,
     lastScan: lastScanTime
@@ -137,7 +248,6 @@ io.on('connection', (socket: Socket) => {
     console.log(`Client disconnected: ${socket.id}`);
   });
 
-  // Handle manual scan request
   socket.on('request-scan', async () => {
     if (!scanInProgress) {
       console.log(`Manual scan requested by client: ${socket.id}`);
@@ -146,13 +256,13 @@ io.on('connection', (socket: Socket) => {
   });
 });
 
-// Twitter API helper functions
+// Twitter API helper functions (Existing)
 const getTwitterHeaders = () => ({
   'Authorization': `Bearer ${TWITTER_BEARER_TOKEN}`,
   'Content-Type': 'application/json'
 });
 
-// DexScreener API integration
+// DexScreener API integration (Existing)
 const getDexScreenerData = async (address: string): Promise<DexData | null> => {
   try {
     const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${address}`, {
@@ -182,10 +292,9 @@ const getDexScreenerData = async (address: string): Promise<DexData | null> => {
   }
 };
 
-// Enhanced token metadata fetching
+// Enhanced token metadata fetching (Existing)
 const getTokenMetadata = async (address: string): Promise<TokenMetadata | null> => {
   try {
-    // Try multiple sources for token metadata
     const sources = [
       `https://api.solscan.io/token/meta?token=${address}`,
       `https://public-api.solscan.io/token/meta?tokenAddress=${address}`
@@ -208,7 +317,6 @@ const getTokenMetadata = async (address: string): Promise<TokenMetadata | null> 
       }
     }
 
-    // Fallback to generated data
     return {
       symbol: `TOKEN${address.slice(-4).toUpperCase()}`,
       name: `Token ${address.slice(0, 4)}...${address.slice(-4)}`,
@@ -226,19 +334,16 @@ const getTokenMetadata = async (address: string): Promise<TokenMetadata | null> 
   }
 };
 
-// Extract Solana contract addresses from text using regex
+// Extract Solana contract addresses from text (Existing)
 const extractSolanaAddresses = (text: string): string[] => {
-  // Enhanced regex for Solana addresses
   const solanaRegex = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
   const matches = text.match(solanaRegex) || [];
 
-  // Filter out common false positives and validate
   return matches.filter((addr: string) => {
     try {
       new PublicKey(addr);
-      // Additional filtering for common false positives
       if (addr.length < 32 || addr.length > 44) return false;
-      if (addr.includes('111111111111111111111111111111')) return false; // System program
+      if (addr.includes('111111111111111111111111111111')) return false;
       return true;
     } catch {
       return false;
@@ -246,7 +351,7 @@ const extractSolanaAddresses = (text: string): string[] => {
   });
 };
 
-// Fetch recent tweets from alpha hunters with enhanced filtering
+// Fetch recent tweets from alpha hunters (Existing)
 const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15): Promise<Tweet[]> => {
   try {
     const url = `https://api.twitter.com/2/users/by/username/${username}`;
@@ -258,7 +363,7 @@ const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15)
       'max_results': maxResults,
       'tweet.fields': 'created_at,public_metrics,context_annotations,entities',
       'exclude': 'retweets,replies',
-      'since_id': getLastTweetId(username) // Only get new tweets
+      'since_id': getLastTweetId(username)
     };
 
     const response = await axios.get(tweetsUrl, {
@@ -268,7 +373,6 @@ const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15)
 
     const tweets: Tweet[] = response.data.data || [];
 
-    // Filter for crypto-related content
     return tweets.filter((tweet: Tweet) => {
       if (!tweet.text) return false;
 
@@ -291,43 +395,35 @@ const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15)
   }
 };
 
-// Simple cache for last tweet IDs (in production, use Redis)
+// Tweet ID cache (Existing)
 const tweetIdCache = new Map<string, string>();
 const getLastTweetId = (username: string): string | undefined => tweetIdCache.get(username);
 const setLastTweetId = (username: string, tweetId: string): void => {
   tweetIdCache.set(username, tweetId);
 };
 
-// Get contract information from Solana with enhanced data
+// Get contract information from Solana (Existing)
 const getContractInfo = async (address: string): Promise<ContractInfo | null> => {
   try {
     const pubkey = new PublicKey(address);
-
-    // Get account info
     const accountInfo = await connection.getAccountInfo(pubkey);
     if (!accountInfo) return null;
 
-    // Get token supply and largest accounts
     let supply: TokenAmount | null = null;
     let largestAccounts: TokenAccountBalancePair[] = [];
 
     try {
       const tokenSupply = await connection.getTokenSupply(pubkey);
       supply = tokenSupply.value;
-
       const largestTokenAccounts = await connection.getTokenLargestAccounts(pubkey);
       largestAccounts = largestTokenAccounts.value;
-    } catch (e) {
-      // Not a token account or other error
-    }
+    } catch (e) {}
 
-    // Get transaction signatures to determine deployment time
     const signatures = await connection.getSignaturesForAddress(pubkey, { limit: 1000 });
     const deployedAt = signatures.length > 0
       ? new Date((signatures[signatures.length - 1].blockTime ?? 0) * 1000)
       : new Date();
 
-    // Calculate holder concentration risk
     const holderRisk = calculateHolderRisk(largestAccounts, supply);
 
     return {
@@ -351,7 +447,7 @@ const getContractInfo = async (address: string): Promise<ContractInfo | null> =>
   }
 };
 
-// Calculate holder concentration risk
+// Calculate holder concentration risk (Existing)
 const calculateHolderRisk = (largestAccounts: TokenAccountBalancePair[], supply: TokenAmount | null): number => {
   if (!largestAccounts || !supply || largestAccounts.length === 0) return 50;
 
@@ -361,7 +457,6 @@ const calculateHolderRisk = (largestAccounts: TokenAccountBalancePair[], supply:
 
   const concentrationRatio = (top5Holdings / totalSupply) * 100;
 
-  // High concentration = high risk
   if (concentrationRatio > 80) return 90;
   if (concentrationRatio > 60) return 70;
   if (concentrationRatio > 40) return 50;
@@ -369,23 +464,20 @@ const calculateHolderRisk = (largestAccounts: TokenAccountBalancePair[], supply:
   return 10;
 };
 
-// Enhanced risk score calculation
+// Calculate risk score (Existing)
 const calculateRiskScore = (contractInfo: ContractInfo, tweetData: Tweet[], mentions: string[], dexData: DexData | null, tokenMeta: TokenMetadata): number => {
-  let riskScore = 50; // Base risk
+  let riskScore = 50;
 
-  // Age factor (newer = riskier)
   const ageMinutes = (Date.now() - contractInfo.deployedAt.getTime()) / (1000 * 60);
   if (ageMinutes < 30) riskScore += 40;
   else if (ageMinutes < 60) riskScore += 25;
   else if (ageMinutes < 1440) riskScore += 10;
-  else if (ageMinutes > 10080) riskScore -= 15; // 1 week
+  else if (ageMinutes > 10080) riskScore -= 15;
 
-  // Mention factor (more mentions = less risky)
   if (mentions.length > 5) riskScore -= 25;
   else if (mentions.length > 2) riskScore -= 15;
   else if (mentions.length === 1) riskScore += 20;
 
-  // Social engagement factor
   const totalEngagement = tweetData.reduce((sum: number, tweet: Tweet) =>
     sum + (tweet.public_metrics?.like_count || 0) +
     (tweet.public_metrics?.retweet_count || 0), 0);
@@ -394,7 +486,6 @@ const calculateRiskScore = (contractInfo: ContractInfo, tweetData: Tweet[], ment
   else if (totalEngagement > 100) riskScore -= 10;
   else if (totalEngagement < 10) riskScore += 15;
 
-  // DexScreener data factor
   if (dexData) {
     if (dexData.liquidity > 50000) riskScore -= 20;
     else if (dexData.liquidity > 10000) riskScore -= 10;
@@ -405,23 +496,20 @@ const calculateRiskScore = (contractInfo: ContractInfo, tweetData: Tweet[], ment
 
     if (dexData.verified) riskScore -= 15;
   } else {
-    riskScore += 20; // No DEX data available
+    riskScore += 20;
   }
 
-  // Holder concentration risk
   if (contractInfo.holderRisk) {
     riskScore += contractInfo.holderRisk * 0.3;
   }
 
-  // Transaction activity
   if (contractInfo.totalSignatures > 1000) riskScore -= 10;
   else if (contractInfo.totalSignatures < 10) riskScore += 15;
 
-  // Clamp between 0 and 100
   return Math.max(0, Math.min(100, Math.round(riskScore)));
 };
 
-// Enhanced tag generation
+// Generate tags (Existing)
 const generateTags = (contractInfo: ContractInfo, riskScore: number, ageMinutes: number, mentions: string[], dexData: DexData | null): string[] => {
   const tags: string[] = [];
 
@@ -435,13 +523,11 @@ const generateTags = (contractInfo: ContractInfo, riskScore: number, ageMinutes:
   if (mentions.length > 4) tags.push('TRENDING');
   else if (mentions.length > 2) tags.push('POPULAR');
 
-  // Check if mentioned by top alpha hunters
   const topHunters = ['degenspartan', 'SolBigBrain', '0xSisyphus', 'thedefiedge'];
   if (mentions.some((m: string) => topHunters.includes(m))) {
     tags.push('ALPHA_HUNTER');
   }
 
-  // DexScreener based tags
   if (dexData) {
     if (dexData.volume24h > 100000) tags.push('HIGH_VOLUME');
     if (dexData.liquidity > 50000) tags.push('GOOD_LIQUIDITY');
@@ -455,7 +541,7 @@ const generateTags = (contractInfo: ContractInfo, riskScore: number, ageMinutes:
   return tags;
 };
 
-// Main scanning function
+// Main scanning function (Existing)
 const performScan = async (): Promise<void> => {
   if (scanInProgress) {
     console.log('Scan already in progress, skipping...');
@@ -465,7 +551,6 @@ const performScan = async (): Promise<void> => {
   scanInProgress = true;
   console.log('🔍 Starting enhanced contract scan...');
 
-  // Broadcast scan start
   io.emit('scan-status', { inProgress: true, stage: 'Fetching tweets...' });
 
   try {
@@ -474,7 +559,6 @@ const performScan = async (): Promise<void> => {
     const mentionMap = new Map<string, string[]>();
     const tweetMap = new Map<string, Tweet[]>();
 
-    // Fetch tweets from all alpha hunters
     for (const [index, hunter] of ALPHA_HUNTERS.entries()) {
       try {
         io.emit('scan-status', {
@@ -484,7 +568,6 @@ const performScan = async (): Promise<void> => {
 
         const tweets = await fetchAlphaHunterTweets(hunter, 20);
 
-        // Update last tweet ID for next scan
         if (tweets.length > 0) {
           setLastTweetId(hunter, tweets[0].id);
         }
@@ -515,8 +598,6 @@ const performScan = async (): Promise<void> => {
         }
 
         allTweets.push(...tweets);
-
-        // Rate limiting
         await new Promise(resolve => setTimeout(resolve, 1200));
 
       } catch (error) {
@@ -535,14 +616,12 @@ const performScan = async (): Promise<void> => {
       stage: `Processing ${contractAddresses.size} contracts...`
     });
 
-    // Process each contract with enhanced data
     const contracts: Contract[] = [];
     let processedCount = 0;
 
     for (const address of contractAddresses) {
       try {
         processedCount++;
-
         if (processedCount % 5 === 0) {
           io.emit('scan-status', {
             inProgress: true,
@@ -550,29 +629,22 @@ const performScan = async (): Promise<void> => {
           });
         }
 
-        // Get contract info from Solana
         const contractInfo = await getContractInfo(address);
         if (!contractInfo) continue;
 
         const mentions = mentionMap.get(address) || [];
         const tweets = tweetMap.get(address) || [];
-
         const ageMinutes = (Date.now() - contractInfo.deployedAt.getTime()) / (1000 * 60);
 
-        // Skip very old contracts unless highly mentioned
         if (ageMinutes > 10080 && mentions.length < 3) continue;
 
-        // Get DexScreener data
         const dexData = await getDexScreenerData(address);
-
-        // Get token metadata
         const tokenMeta = await getTokenMetadata(address);
         if (!tokenMeta) continue;
 
         const riskScore = calculateRiskScore(contractInfo, tweets, mentions, dexData, tokenMeta);
         const tags = generateTags(contractInfo, riskScore, ageMinutes, mentions, dexData);
 
-        // Calculate enhanced scores
         const socialScore = Math.min(100, mentions.length * 12 +
           tweets.reduce((sum: number, t: Tweet) => sum + (t.public_metrics?.like_count || 0), 0) / 15);
 
@@ -606,7 +678,6 @@ const performScan = async (): Promise<void> => {
           dexData
         });
 
-        // Rate limiting
         await new Promise(resolve => setTimeout(resolve, 300));
 
       } catch (error) {
@@ -619,19 +690,16 @@ const performScan = async (): Promise<void> => {
       }
     }
 
-    // Sort by multiple factors: risk score, mentions, age
     contracts.sort((a: Contract, b: Contract) => {
       const aScore = (a.mentionedBy.length * 10) + (100 - a.riskScore) + (a.socialScore / 10);
       const bScore = (b.mentionedBy.length * 10) + (100 - b.riskScore) + (b.socialScore / 10);
       return bScore - aScore;
     });
 
-    // Update cache
     contractsCache = contracts;
     lastScanTime = new Date();
     console.log(`✅ Scan completed: ${contracts.length} contracts processed`);
 
-    // Broadcast results to all connected clients
     io.emit('contracts-update', {
       contracts: contractsCache,
       lastUpdate: lastScanTime,
@@ -658,7 +726,174 @@ const performScan = async (): Promise<void> => {
   }
 };
 
-// Helper to handle async Express handlers with generic params
+// OKX DEX API Helper Functions (New)
+const getOKXHeaders = (timestamp: string, method: string, requestPath: string, queryString = "", body = ""): Record<string, string> => {
+  if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_API_PASSPHRASE || !OKX_PROJECT_ID) {
+    throw new Error("Missing required environment variables for OKX API authentication");
+  }
+
+  const fullPath = method === "GET" && queryString ? requestPath + queryString : requestPath;
+  const stringToSign = timestamp + method + fullPath + (method === "POST" ? body : "");
+
+  return {
+    "Content-Type": "application/json",
+    "OK-ACCESS-KEY": OKX_API_KEY,
+    "OK-ACCESS-SIGN": CryptoJS.enc.Base64.stringify(
+      CryptoJS.HmacSHA256(stringToSign, OKX_SECRET_KEY)
+    ),
+    "OK-ACCESS-TIMESTAMP": timestamp,
+    "OK-ACCESS-PASSPHRASE": OKX_API_PASSPHRASE,
+    "OK-ACCESS-PROJECT": OKX_PROJECT_ID,
+  };
+};
+
+// Fetch Swap Quote from OKX DEX
+const getOKXSwapQuote = async (
+  fromTokenAddress: string,
+  toTokenAddress: string,
+  amount: string
+): Promise<OKXQuoteData> => {
+  const timestamp = new Date().toISOString();
+  const path = `dex/aggregator/quote`;
+  const requestPath = `/api/v5/${path}`;
+
+  const params: Record<string, string> = {
+    chainIndex: SOLANA_CHAIN_ID,
+    amount,
+    fromTokenAddress,
+    toTokenAddress,
+    priceImpactProtectionPercentage: "0.9", // 90% default
+  };
+
+  const queryString = "?" + new URLSearchParams(params).toString();
+  const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
+
+  const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+    headers,
+    timeout: 15000,
+  });
+
+  if (response.data.code !== "0" || !response.data.data?.[0]) {
+    throw new Error(`Failed to get quote: ${response.data.msg || "Unknown error"}`);
+  }
+
+  return response.data.data[0];
+};
+
+// Fetch Swap Data from OKX DEX
+const getOKXSwapData = async (
+  fromTokenAddress: string,
+  toTokenAddress: string,
+  amount: string,
+  userAddress: string,
+  slippage = "0.5"
+): Promise<OKXSwapData> => {
+  const timestamp = new Date().toISOString();
+  const path = `dex/aggregator/swap`;
+  const requestPath = `/api/v5/${path}`;
+
+  const params: Record<string, string> = {
+    chainIndex: SOLANA_CHAIN_ID,
+    fromTokenAddress,
+    toTokenAddress,
+    amount,
+    slippage,
+    userWalletAddress: userAddress,
+    priceImpactProtectionPercentage: "0.9",
+  };
+
+  const queryString = "?" + new URLSearchParams(params).toString();
+  const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
+
+  const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+    headers,
+    timeout: 20000,
+  });
+
+  if (response.data.code !== "0" || !response.data.data?.[0]) {
+    throw new Error(`Swap API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+  }
+
+  const swapData = response.data.data[0];
+  if (!swapData.tx || !swapData.tx.data) {
+    throw new Error("Invalid swap transaction data received from API");
+  }
+
+  return swapData;
+};
+
+// Broadcast Transaction via OKX DEX
+const broadcastOKXTransaction = async (signedTx: string): Promise<string> => {
+  const path = `dex/pre-transaction/broadcast-transaction`;
+  const requestPath = `/api/v5/${path}`;
+
+  const broadcastData = {
+    signedTx,
+    chainIndex: SOLANA_CHAIN_ID,
+  };
+
+  const bodyString = JSON.stringify(broadcastData);
+  const timestamp = new Date().toISOString();
+  const headers = getOKXHeaders(timestamp, "POST", requestPath, "", bodyString);
+
+  const response = await axios.post(`${OKX_BASE_URL}${requestPath}`, broadcastData, {
+    headers,
+    timeout: 20000,
+  });
+
+  if (response.data.code === "0" && response.data.data?.[0]?.orderId) {
+    return response.data.data[0].orderId;
+  } else {
+    throw new Error(`Broadcast failed: ${response.data.msg || "Unknown error"}`);
+  }
+};
+
+// Track Transaction via OKX DEX
+const trackOKXTransaction = async (orderId: string, intervalMs = 5000, timeoutMs = 60000): Promise<any> => {
+  const startTime = Date.now();
+  let lastStatus = "";
+
+  while (Date.now() - startTime < timeoutMs) {
+    const path = `dex/post-transaction/orders`;
+    const requestPath = `/api/v5/${path}`;
+
+    const params = {
+      orderId,
+      chainIndex: SOLANA_CHAIN_ID,
+      limit: "1",
+    };
+
+    const queryString = "?" + new URLSearchParams(params).toString();
+    const timestamp = new Date().toISOString();
+    const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
+
+    const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+      headers,
+      timeout: 10000,
+    });
+
+    if (response.data.code === "0" && response.data.data && response.data.data.length > 0) {
+      if (response.data.data[0].orders && response.data.data[0].orders.length > 0) {
+        const txData = response.data.data[0];
+        const status = txData.orders[0].txStatus;
+
+        if (status !== lastStatus) {
+          lastStatus = status;
+          if (status === "2") { // Success
+            return txData;
+          } else if (status === "3") { // Failed
+            throw new Error(`Transaction failed: ${txData.orders[0].failReason || "Unknown reason"}`);
+          }
+        }
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error("Transaction tracking timed out");
+};
+
+// Helper to handle async Express handlers (Existing)
 const asyncHandler = <P = any, ResBody = any, ReqBody = any, ReqQuery = any>(
   fn: (req: Request<P, ResBody, ReqBody, ReqQuery>, res: Response<ResBody>, next: NextFunction) => Promise<void | Response<ResBody>>
 ): RequestHandler => {
@@ -668,11 +903,9 @@ const asyncHandler = <P = any, ResBody = any, ReqBody = any, ReqQuery = any>(
   };
 };
 
-// REST API Endpoints
-// Main scan endpoint (now uses cached data)
+// REST API Endpoints (Existing)
 app.get('/api/scan', asyncHandler(async (req: Request, res: Response) => {
   if (contractsCache.length === 0 && !scanInProgress) {
-    // If no cached data and no scan in progress, start one
     await performScan();
   }
 
@@ -692,13 +925,10 @@ app.get('/api/scan', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
-// Enhanced contract details endpoint
 app.get('/api/contract/:address', asyncHandler<{ address: string }>(async (req: Request<{ address: string }>, res: Response) => {
   const { address } = req.params;
 
-  // Check cache first
   const cachedContract = contractsCache.find(c => c.address === address);
-
   const contractInfo = await getContractInfo(address);
   if (!contractInfo) {
     return res.status(404).json({
@@ -707,10 +937,8 @@ app.get('/api/contract/:address', asyncHandler<{ address: string }>(async (req: 
     });
   }
 
-  // Get fresh DexScreener data
   const dexData = await getDexScreenerData(address);
 
-  // Search for recent tweets mentioning this contract
   const searchQuery = `${address} OR CA:${address}`;
   const searchUrl = 'https://api.twitter.com/2/tweets/search/recent';
 
@@ -758,7 +986,6 @@ app.get('/api/contract/:address', asyncHandler<{ address: string }>(async (req: 
   });
 }));
 
-// WebSocket status endpoint
 app.get('/api/status', (req: Request, res: Response) => {
   res.json({
     success: true,
@@ -772,7 +999,6 @@ app.get('/api/status', (req: Request, res: Response) => {
   });
 });
 
-// Manual scan trigger
 app.post('/api/scan/trigger', asyncHandler(async (req: Request, res: Response) => {
   if (scanInProgress) {
     res.status(429).json({
@@ -782,7 +1008,6 @@ app.post('/api/scan/trigger', asyncHandler(async (req: Request, res: Response) =
     return;
   }
 
-  // Start scan in background
   await performScan();
 
   res.json({
@@ -792,7 +1017,6 @@ app.post('/api/scan/trigger', asyncHandler(async (req: Request, res: Response) =
   });
 }));
 
-// Health check endpoint
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     success: true,
@@ -812,7 +1036,6 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// Get list of monitored alpha hunters
 app.get('/api/hunters', (req: Request, res: Response) => {
   res.json({
     success: true,
@@ -824,7 +1047,75 @@ app.get('/api/hunters', (req: Request, res: Response) => {
   });
 });
 
-// Error handling middleware
+// New OKX DEX API Endpoints
+// Get Swap Quote
+app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string }>, res: Response) => {
+  const { fromTokenAddress, toTokenAddress, amount } = req.body;
+
+  if (!fromTokenAddress || !toTokenAddress || !amount) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required parameters: fromTokenAddress, toTokenAddress, amount",
+    });
+  }
+
+  try {
+    const quote = await getOKXSwapQuote(fromTokenAddress, toTokenAddress, amount);
+    res.json({
+      success: true,
+      data: quote,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch swap quote",
+    });
+  }
+}));
+
+// Execute Swap
+app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string; userAddress: string; slippage?: string; signedTx: string }>, res: Response) => {
+  const { fromTokenAddress, toTokenAddress, amount, userAddress, slippage = "0.5", signedTx } = req.body;
+
+  if (!fromTokenAddress || !toTokenAddress || !amount || !userAddress || !signedTx) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required parameters: fromTokenAddress, toTokenAddress, amount, userAddress, signedTx",
+    });
+  }
+
+  try {
+    // Step 1: Get swap data (already done on frontend, but we can validate here if needed)
+    const swapData = await getOKXSwapData(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
+    const callData = swapData.tx.data;
+
+    if (!callData) {
+      throw new Error("Invalid transaction data received from API");
+    }
+
+    // Step 2: Broadcast the signed transaction
+    const orderId = await broadcastOKXTransaction(signedTx);
+
+    // Step 3: Track the transaction
+    const txStatus = await trackOKXTransaction(orderId);
+
+    res.json({
+      success: true,
+      data: {
+        orderId,
+        txHash: txStatus.orders[0].txHash,
+        status: txStatus.orders[0].txStatus === "2" ? "SUCCESS" : "PENDING",
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to execute swap",
+    });
+  }
+}));
+
+// Error handling middleware (Existing)
 app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   console.error('Server error:', error);
   res.status(500).json({
@@ -834,7 +1125,7 @@ app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-// 404 handler
+// 404 handler (Existing)
 app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -845,12 +1136,14 @@ app.use((req: Request, res: Response) => {
       'GET /api/health',
       'GET /api/hunters',
       'GET /api/status',
-      'POST /api/scan/trigger'
+      'POST /api/scan/trigger',
+      'POST /api/swap/quote',
+      'POST /api/swap/execute',
     ]
   });
 });
 
-// Automated scanning with cron job
+// Automated scanning with cron job (Existing)
 cron.schedule('*/10 * * * *', () => {
   console.log('🕐 Scheduled scan starting...');
   performScan();
@@ -864,7 +1157,6 @@ server.listen(PORT, () => {
   console.log(`🔄 Auto-scan every 10 minutes`);
   console.log(`🌐 WebSocket server ready for real-time updates`);
 
-  // Initial scan on startup
   setTimeout(() => {
     console.log('🎯 Starting initial scan...');
     performScan();

@@ -1,13 +1,19 @@
 import { useState, useEffect } from "react";
-import { Zap, Settings, TrendingUp, Brain, Sparkles, Grid3X3, Cpu, Waves, Menu, X, ChevronRight, Activity, Layers, Binary } from "lucide-react";
+import { Zap, Settings, TrendingUp, Brain, Sparkles, Menu, X, ChevronRight, Activity, Layers, Binary } from "lucide-react";
 import SwapForm from "./components/SwapForm";
 import SettingsModal from "./components/SettingsModal";
 import KOLAnalysis from "./components/KOLAnalysis";
 import ArbitrageOpportunities from "./components/Arbitrage";
-import { createAppKit } from '@reown/appkit/react';
-import { useAppKit } from '@reown/appkit/react';
-import { getBalance } from './lib/solana-swap';
+import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider } from '@reown/appkit/react';
+import type { Provider } from '@reown/appkit-adapter-solana/react';
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { projectId, metadata, solanaWeb3JsAdapter, networks } from './config';
+import './App.css';
+
+// Initialize Solana Connection
+const connection = new Connection("https://api.mainnet-beta.solana.com", {
+  confirmTransactionInitialTimeout: 30000,
+});
 
 // Initialize AppKit with enhanced dark theme
 createAppKit({
@@ -20,10 +26,10 @@ createAppKit({
     analytics: true,
   },
   themeVariables: {
-    '--w3m-accent': '#00f6ff',
-    '--w3m-background': '#0a0a0f',
-    '--w3m-text': '#ffffff',
-    '--w3m-border-radius': '16px',
+    '--w3m-accent-color': '#00f6ff',
+    '--w3m-color-bg-1': '#0a0a0f',
+    '--w3m-color-fg-1': '#ffffff',
+    '--w3m-border-radius-master': '16px',
   },
 });
 
@@ -33,7 +39,11 @@ export default function App() {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [balance, setBalance] = useState<string>('0');
   const [isLoading, setIsLoading] = useState(false);
-  const { walletProvider, address, isConnected } = useAppKit();
+
+  // Use correct hooks for wallet information
+  const { open } = useAppKit(); // For modal control
+  const { address, isConnected } = useAppKitAccount();
+  const { walletProvider } = useAppKitProvider<Provider>('solana');
 
   // Enhanced balance fetching with loading states
   useEffect(() => {
@@ -41,8 +51,10 @@ export default function App() {
       if (isConnected && address && walletProvider) {
         setIsLoading(true);
         try {
-          const walletBalance = await getBalance(address);
-          setBalance(walletBalance.toFixed(4));
+          const wallet = new PublicKey(address);
+          const walletBalance = await connection.getBalance(wallet); // Get the amount in LAMPORTS
+          const balanceInSOL = walletBalance / LAMPORTS_PER_SOL; // Convert to SOL
+          setBalance(balanceInSOL.toFixed(4));
         } catch (error) {
           console.error('Error fetching balance:', error);
           setBalance('0');
@@ -343,23 +355,6 @@ export default function App() {
 
       {/* Enhanced Settings Modal */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      
-      {/* Additional CSS for animations */}
-      <style jsx>{`
-        @keyframes fade-in {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.5s ease-out;
-        }
-      `}</style>
     </div>
   );
 }

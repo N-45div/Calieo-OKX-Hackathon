@@ -248,7 +248,7 @@ export default function SolanaAlphaHunter() {
               icon={Shield} 
               label="Low Risk" 
               value={contracts.filter(c => c.riskScore < 40).length} 
-              color="from-emerald-500 to-teal-500" importation
+              color="from-emerald-500 to-teal-500" 
             />
             <StatCard 
               icon={Flame} 
