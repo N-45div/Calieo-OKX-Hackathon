@@ -10,8 +10,6 @@ import base58 from "bs58";
 // Backend API URL (adjust based on your backend deployment)
 const BACKEND_API_URL = "http://localhost:3001";
 
-// Solana Connection
-
 interface SwapFormProps {
   walletProvider?: Provider;
   balance: string;
@@ -110,9 +108,10 @@ export default function SwapForm({ balance }: SwapFormProps) {
     }
   };
 
-  // Prepare transaction for signing (Updated to handle MessageV0)
+  // Prepare transaction for signing (Updated with validation and debugging)
   const prepareTransaction = async (callData: string, userAddress: string): Promise<VersionedTransaction> => {
     try {
+      console.log("Decoding callData:", callData);
       const decodedTransaction = base58.decode(callData);
       if (!connection) {
         throw new Error("Solana connection is not available.");
@@ -120,6 +119,12 @@ export default function SwapForm({ balance }: SwapFormProps) {
       const recentBlockhash = await connection.getLatestBlockhash('confirmed');
 
       const tx = VersionedTransaction.deserialize(decodedTransaction);
+      console.log("Deserialized transaction:", {
+        message: tx.message,
+        signatures: tx.signatures,
+        staticAccountKeys: tx.message.staticAccountKeys.map(key => key.toBase58()),
+      });
+
       const message = tx.message;
 
       // Add compute budget and priority fee instructions
@@ -134,21 +139,39 @@ export default function SwapForm({ balance }: SwapFormProps) {
       if ('version' in message && message.version === 0) {
         const messageV0 = message as MessageV0;
 
-        // Combine existing instructions with new instructions
+        // Validate and combine existing instructions with new instructions
         const allInstructions: TransactionInstruction[] = [
           computeBudgetIx,
           priorityFeeIx,
           ...messageV0.compiledInstructions.map((compiledIx) => {
+            // Validate programIdIndex
+            if (compiledIx.programIdIndex >= messageV0.staticAccountKeys.length) {
+              throw new Error(`Invalid programIdIndex ${compiledIx.programIdIndex}. staticAccountKeys length: ${messageV0.staticAccountKeys.length}`);
+            }
+            const programId = messageV0.staticAccountKeys[compiledIx.programIdIndex];
+            if (!programId) {
+              throw new Error(`Program ID at index ${compiledIx.programIdIndex} is undefined`);
+            }
+
+            // Validate accountKeyIndexes
+            const keys = compiledIx.accountKeyIndexes.map((idx) => {
+              if (idx >= messageV0.staticAccountKeys.length) {
+                throw new Error(`Invalid accountKeyIndex ${idx}. staticAccountKeys length: ${messageV0.staticAccountKeys.length}`);
+              }
+              const pubkey = messageV0.staticAccountKeys[idx];
+              if (!pubkey) {
+                throw new Error(`Account key at index ${idx} is undefined`);
+              }
+              return {
+                pubkey,
+                isSigner: messageV0.isAccountSigner(idx),
+                isWritable: messageV0.isAccountWritable(idx),
+              };
+            });
+
             return new TransactionInstruction({
-              keys: compiledIx.accountKeyIndexes.map((idx) => {
-                const pubkey = messageV0.staticAccountKeys[idx];
-                return {
-                  pubkey,
-                  isSigner: messageV0.isAccountSigner(idx),
-                  isWritable: messageV0.isAccountWritable(idx),
-                };
-              }),
-              programId: messageV0.staticAccountKeys[compiledIx.programIdIndex],
+              keys,
+              programId,
               data: Buffer.from(compiledIx.data),
             });
           }),

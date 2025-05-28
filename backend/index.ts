@@ -230,6 +230,9 @@ const ALPHA_HUNTERS: string[] = [
   'SolanaFloor'
 ];
 
+// Cache for Twitter user IDs
+const userIdCache = new Map<string, string>();
+
 // WebSocket connection handling (Existing)
 io.on('connection', (socket: Socket) => {
   console.log(`Client connected: ${socket.id}`);
@@ -257,11 +260,81 @@ io.on('connection', (socket: Socket) => {
   });
 });
 
-// Twitter API helper functions (Existing)
+// Twitter API helper functions (Updated)
 const getTwitterHeaders = () => ({
   'Authorization': `Bearer ${TWITTER_BEARER_TOKEN}`,
   'Content-Type': 'application/json'
 });
+
+// Fetch user ID with caching
+const getUserId = async (username: string): Promise<string> => {
+  if (userIdCache.has(username)) {
+    return userIdCache.get(username)!;
+  }
+
+  try {
+    const url = `https://api.twitter.com/2/users/by/username/${username}`;
+    const response = await axios.get(url, { headers: getTwitterHeaders() });
+    const userId = response.data.data.id;
+    userIdCache.set(username, userId);
+    return userId;
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`Error fetching user ID for ${username}:`, error.message);
+      throw error;
+    }
+    throw error;
+  }
+};
+
+// Fetch recent tweets from alpha hunters with rate limiting
+const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15): Promise<Tweet[]> => {
+  try {
+    const userId = await getUserId(username);
+
+    const tweetsUrl = `https://api.twitter.com/2/users/${userId}/tweets`;
+    const params = {
+      'max_results': maxResults,
+      'tweet.fields': 'created_at,public_metrics,context_annotations,entities',
+      'exclude': 'retweets,replies',
+      'since_id': getLastTweetId(username)
+    };
+
+    const response = await axios.get(tweetsUrl, {
+      headers: getTwitterHeaders(),
+      params
+    });
+
+    const tweets: Tweet[] = response.data.data || [];
+
+    return tweets.filter((tweet: Tweet) => {
+      if (!tweet.text) return false;
+
+      const text = tweet.text.toLowerCase();
+      const cryptoKeywords = [
+        'solana', 'sol', 'token', 'contract', 'mint', 'liquidity',
+        'dex', 'trading', 'pump', 'moon', 'gem', 'alpha', 'ape',
+        'launch', 'new', 'fresh', 'deployed', '$', 'CA:'
+      ];
+
+      return cryptoKeywords.some(keyword => text.includes(keyword));
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`Error fetching tweets for ${username}:`, error.message);
+    } else {
+      console.error(`Error fetching tweets for ${username}:`, error);
+    }
+    return [];
+  }
+};
+
+// Tweet ID cache (Existing)
+const tweetIdCache = new Map<string, string>();
+const getLastTweetId = (username: string): string | undefined => tweetIdCache.get(username);
+const setLastTweetId = (username: string, tweetId: string): void => {
+  tweetIdCache.set(username, tweetId);
+};
 
 // DexScreener API integration (Existing)
 const getDexScreenerData = async (address: string): Promise<DexData | null> => {
@@ -350,57 +423,6 @@ const extractSolanaAddresses = (text: string): string[] => {
       return false;
     }
   });
-};
-
-// Fetch recent tweets from alpha hunters (Existing)
-const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15): Promise<Tweet[]> => {
-  try {
-    const url = `https://api.twitter.com/2/users/by/username/${username}`;
-    const userResponse = await axios.get(url, { headers: getTwitterHeaders() });
-    const userId = userResponse.data.data.id;
-
-    const tweetsUrl = `https://api.twitter.com/2/users/${userId}/tweets`;
-    const params = {
-      'max_results': maxResults,
-      'tweet.fields': 'created_at,public_metrics,context_annotations,entities',
-      'exclude': 'retweets,replies',
-      'since_id': getLastTweetId(username)
-    };
-
-    const response = await axios.get(tweetsUrl, {
-      headers: getTwitterHeaders(),
-      params
-    });
-
-    const tweets: Tweet[] = response.data.data || [];
-
-    return tweets.filter((tweet: Tweet) => {
-      if (!tweet.text) return false;
-
-      const text = tweet.text.toLowerCase();
-      const cryptoKeywords = [
-        'solana', 'sol', 'token', 'contract', 'mint', 'liquidity',
-        'dex', 'trading', 'pump', 'moon', 'gem', 'alpha', 'ape',
-        'launch', 'new', 'fresh', 'deployed', '$', 'CA:'
-      ];
-
-      return cryptoKeywords.some(keyword => text.includes(keyword));
-    });
-  } catch (error) {
-    if (error instanceof Error) {
-      console.error(`Error fetching tweets for ${username}:`, error.message);
-    } else {
-      console.error(`Error fetching tweets for ${username}:`, error);
-    }
-    return [];
-  }
-};
-
-// Tweet ID cache (Existing)
-const tweetIdCache = new Map<string, string>();
-const getLastTweetId = (username: string): string | undefined => tweetIdCache.get(username);
-const setLastTweetId = (username: string, tweetId: string): void => {
-  tweetIdCache.set(username, tweetId);
 };
 
 // Get contract information from Solana (Existing)
@@ -542,7 +564,7 @@ const generateTags = (contractInfo: ContractInfo, riskScore: number, ageMinutes:
   return tags;
 };
 
-// Main scanning function (Existing)
+// Main scanning function (Updated with rate limiting)
 const performScan = async (): Promise<void> => {
   if (scanInProgress) {
     console.log('Scan already in progress, skipping...');
@@ -599,7 +621,8 @@ const performScan = async (): Promise<void> => {
         }
 
         allTweets.push(...tweets);
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        // Increased delay to avoid rate limits (spread requests over time)
+        await new Promise(resolve => setTimeout(resolve, 5000));
 
       } catch (error) {
         if (error instanceof Error) {
@@ -1107,7 +1130,7 @@ app.get('/api/hunters', (req: Request, res: Response) => {
   });
 });
 
-// New OKX DEX API Endpoints
+// OKX DEX API Endpoints
 // Get Swap Quote
 app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount } = req.body;
@@ -1134,7 +1157,7 @@ app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromToke
   }
 }));
 
-// Execute Swap (Updated)
+// Execute Swap (Updated to handle "pending" case)
 app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string; userAddress: string; slippage?: string; signedTx: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount, userAddress, slippage = "0.5", signedTx } = req.body;
 
@@ -1152,6 +1175,15 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
 
     if (!callData) {
       throw new Error("Invalid transaction data received from API");
+    }
+
+    // If signedTx is "pending", return the swap data for the frontend to sign
+    if (signedTx === "pending") {
+      res.json({
+        success: true,
+        data: swapData,
+      });
+      return;
     }
 
     // Step 2: Broadcast the signed transaction with userAddress
@@ -1198,7 +1230,7 @@ app.use((req: Request, res: Response) => {
       'GET /api/health',
       'GET /api/hunters',
       'GET /api/status',
-      'POST /api/swap/trigger',
+      'POST /api/scan/trigger',
       'POST /api/swap/quote',
       'POST /api/swap/execute',
     ]
