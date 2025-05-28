@@ -38,8 +38,8 @@ const OKX_SECRET_KEY = process.env.OKX_SECRET_KEY || "6E769FF4CC4C695D9E91D21642
 const OKX_API_PASSPHRASE = process.env.OKX_API_PASSPHRASE || "Suresh@23";
 const OKX_PROJECT_ID = process.env.OKX_PROJECT_ID || "c38b1db0c8c646520faa9282dcf90717";
 const OKX_BASE_URL = "https://web3.okx.com";
-const SOLANA_CHAIN_INDEX = "501"; // Solana Mainnet chainIndex (verify with OKX docs)
-const SOLANA_CHAIN_ID = "501"; // Deprecated chainId, included for backward compatibility
+const SOLANA_CHAIN_INDEX = "501"; // Solana Mainnet chainIndex
+const SOLANA_CHAIN_ID = "501"; // Deprecated chainId
 
 // Interfaces (Existing)
 interface Tweet {
@@ -102,7 +102,7 @@ interface Contract {
   dexData: DexData | null;
 }
 
-// New Interfaces for OKX DEX API
+// Interfaces for OKX DEX API
 interface OKXQuoteData {
   chainIndex: string;
   fromTokenAmount: string;
@@ -158,6 +158,60 @@ interface OKXSwapInstruction {
 interface OKXSwapInstructionsData {
   addressLookupTableAccount: string[];
   instructionLists: OKXSwapInstruction[];
+}
+
+interface OKXSwapData {
+  routerResult: any;
+  chainIndex: string;
+  swapMode: string;
+  fromTokenAmount: string;
+  toTokenAmount: string;
+  tradeFee: string;
+  estimateGasFee: string;
+  dexRouterList: Array<{
+    router: string;
+    routerPercent: string;
+    subRouterList: Array<{
+      dexProtocol: string[];
+      dexName: string;
+      percent: string;
+    }>;
+  }>;
+  fromToken: {
+    tokenContractAddress: string;
+    tokenSymbol: string;
+    tokenUnitPrice: string | null;
+    decimal: string;
+    isHoneyPot: boolean;
+    taxRate: string;
+  };
+  toToken: {
+    tokenContractAddress: string;
+    tokenSymbol: string;
+    tokenUnitPrice: string | null;
+    decimal: string;
+    isHoneyPot: boolean;
+    taxRate: string;
+  };
+  quoteCompareList: Array<{
+    dexName: string;
+    dexLogo: string;
+    tradeFee: string;
+    amountOut: string;
+    priceImpactPercentage: string;
+  }>;
+  tx: {
+    signatureData?: string[];
+    from: string;
+    gas: string;
+    gasPrice: string;
+    maxPriorityFeePerGas: string;
+    to: string;
+    value: string;
+    minReceiveAmount: string;
+    data: string;
+    slippage: string;
+  };
 }
 
 interface SwapResult {
@@ -713,7 +767,7 @@ const performScan = async (): Promise<void> => {
   }
 };
 
-// OKX DEX API Helper Functions (Updated)
+// OKX DEX API Helper Functions
 const getOKXHeaders = (timestamp: string, method: string, requestPath: string, queryString = "", body = ""): Record<string, string> => {
   if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_API_PASSPHRASE || !OKX_PROJECT_ID) {
     throw new Error("Missing required environment variables for OKX API authentication");
@@ -771,10 +825,14 @@ const getOKXSwapQuote = async (
     return response.data.data[0];
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      console.error("OKX API Error:", {
+      console.error("OKX API Error in getOKXSwapQuote:", {
         message: error.message,
         response: error.response?.data,
         status: error.response?.status,
+        request: {
+          url: `${OKX_BASE_URL}${requestPath}${queryString}`,
+          headers,
+        },
       });
       throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
     }
@@ -782,13 +840,15 @@ const getOKXSwapQuote = async (
   }
 };
 
-// Fetch Swap Instructions from OKX DEX (New)
+// Fetch Swap Instructions from OKX DEX (Updated with Retry Logic)
 const getOKXSwapInstructions = async (
   fromTokenAddress: string,
   toTokenAddress: string,
   amount: string,
   userAddress: string,
-  slippage = "0.5"
+  slippage = "0.5",
+  retries = 3,
+  delayMs = 2000
 ): Promise<OKXSwapInstructionsData> => {
   const timestamp = new Date().toISOString();
   const path = `dex/aggregator/swap-instruction`;
@@ -803,41 +863,128 @@ const getOKXSwapInstructions = async (
     slippage,
     userWalletAddress: userAddress,
     priceImpactProtectionPercentage: "0.9",
-    computeUnitLimit: "300000", // Set a reasonable compute unit limit
+    computeUnitLimit: "300000",
   };
 
   const queryString = "?" + new URLSearchParams(params).toString();
   const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
 
-  try {
-    const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
-      headers,
-      timeout: 20000,
-    });
-
-    console.log("OKX API Response for Swap Instructions:", response.data);
-
-    if (response.data.code !== "0" || !response.data.data?.[0]) {
-      throw new Error(`Swap Instructions API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
-    }
-
-    const swapInstructions = response.data.data[0];
-    if (!swapInstructions.instructionLists || !Array.isArray(swapInstructions.instructionLists)) {
-      throw new Error("Invalid swap instructions data received from API");
-    }
-
-    return swapInstructions;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      console.error("OKX API Error:", {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt} to fetch swap instructions...`);
+      const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+        headers,
+        timeout: 20000,
       });
-      throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+
+      console.log("OKX API Response for Swap Instructions:", response.data);
+
+      if (response.data.code !== "0" || !response.data.data?.[0]) {
+        throw new Error(`Swap Instructions API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+      }
+
+      const swapInstructions = response.data.data[0];
+      if (!swapInstructions.instructionLists || !Array.isArray(swapInstructions.instructionLists)) {
+        throw new Error("Invalid swap instructions data received from API");
+      }
+
+      return swapInstructions;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        console.error(`OKX API Error on attempt ${attempt} in getOKXSwapInstructions:`, {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+          request: {
+            url: `${OKX_BASE_URL}${requestPath}${queryString}`,
+            headers,
+            params,
+          },
+        });
+        if (error.response?.status === 429 && attempt < retries) {
+          console.warn(`Rate limit exceeded, retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+      }
+      throw error;
     }
-    throw error;
   }
+  throw new Error("Max retries reached for OKX API request in getOKXSwapInstructions");
+};
+
+// Fallback: Fetch Swap Data from OKX DEX /swap endpoint
+const getOKXSwapData = async (
+  fromTokenAddress: string,
+  toTokenAddress: string,
+  amount: string,
+  userAddress: string,
+  slippage = "0.5",
+  retries = 3,
+  delayMs = 2000
+): Promise<OKXSwapData> => {
+  const timestamp = new Date().toISOString();
+  const path = `dex/aggregator/swap`;
+  const requestPath = `/api/v5/${path}`;
+
+  const params: Record<string, string> = {
+    chainIndex: SOLANA_CHAIN_INDEX,
+    chainId: SOLANA_CHAIN_ID,
+    fromTokenAddress,
+    toTokenAddress,
+    amount,
+    slippage,
+    userWalletAddress: userAddress,
+    priceImpactProtectionPercentage: "0.9",
+  };
+
+  const queryString = "?" + new URLSearchParams(params).toString();
+  const headers = getOKXHeaders(timestamp, "GET", requestPath, queryString);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt} to fetch swap data...`);
+      const response = await axios.get(`${OKX_BASE_URL}${requestPath}${queryString}`, {
+        headers,
+        timeout: 20000,
+      });
+
+      console.log("OKX API Response for Swap Data:", response.data);
+
+      if (response.data.code !== "0" || !response.data.data?.[0]) {
+        throw new Error(`Swap API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+      }
+
+      const swapData = response.data.data[0];
+      if (!swapData.tx || !swapData.tx.data) {
+        throw new Error("Invalid swap transaction data received from API");
+      }
+
+      return swapData;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        console.error(`OKX API Error on attempt ${attempt} in getOKXSwapData:`, {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+          request: {
+            url: `${OKX_BASE_URL}${requestPath}${queryString}`,
+            headers,
+            params,
+          },
+        });
+        if (error.response?.status === 429 && attempt < retries) {
+          console.warn(`Rate limit exceeded, retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries reached for OKX API request in getOKXSwapData");
 };
 
 // Broadcast Transaction via OKX DEX
@@ -870,7 +1017,7 @@ const broadcastOKXTransaction = async (signedTx: string, userAddress: string): P
     }
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      console.error("OKX API Error:", {
+      console.error("OKX API Error in broadcastOKXTransaction:", {
         message: error.message,
         response: error.response?.data,
         status: error.response?.status,
@@ -1121,7 +1268,7 @@ app.post('/api/swap/quote', asyncHandler(async (req: Request<{}, any, { fromToke
   }
 }));
 
-// Execute Swap (Updated to use swap-instruction endpoint)
+// Execute Swap (Updated to try swap-instruction first, then fall back to swap)
 app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTokenAddress: string; toTokenAddress: string; amount: string; userAddress: string; slippage?: string; signedTx: string }>, res: Response) => {
   const { fromTokenAddress, toTokenAddress, amount, userAddress, slippage = "0.5", signedTx } = req.body;
 
@@ -1133,14 +1280,24 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
   }
 
   try {
-    // Step 1: Get swap instructions
-    const swapInstructions = await getOKXSwapInstructions(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
+    let swapData: OKXSwapInstructionsData | OKXSwapData;
 
-    // If signedTx is "pending", return the swap instructions for the frontend to construct the transaction
+    // Step 1: Try to get swap instructions using /swap-instruction endpoint
+    try {
+      swapData = await getOKXSwapInstructions(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
+      console.log("Successfully fetched swap instructions using /swap-instruction");
+    } catch (error) {
+      console.warn("Failed to fetch swap instructions, falling back to /swap endpoint:", error);
+      // Fallback to /swap endpoint
+      swapData = await getOKXSwapData(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
+      console.log("Successfully fetched swap data using /swap as fallback");
+    }
+
+    // If signedTx is "pending", return the swap data for the frontend to construct the transaction
     if (signedTx === "pending") {
       res.json({
         success: true,
-        data: swapInstructions,
+        data: swapData,
       });
       return;
     }
@@ -1164,17 +1321,30 @@ app.post('/api/swap/execute', asyncHandler(async (req: Request<{}, any, { fromTo
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to execute swap",
+      details: error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : undefined,
     });
   }
 }));
 
-// Error handling middleware (Existing)
+// Error handling middleware (Updated for better logging)
 app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
-  console.error('Server error:', error);
+  console.error('Server error:', {
+    message: error.message,
+    stack: error.stack,
+    request: {
+      method: req.method,
+      url: req.url,
+      body: req.body,
+      headers: req.headers,
+    },
+  });
   res.status(500).json({
     success: false,
     error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
   });
 });
 

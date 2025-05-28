@@ -54,6 +54,12 @@ interface OKXSwapInstructionsData {
   instructionLists: OKXSwapInstruction[];
 }
 
+interface OKXSwapData {
+  tx: {
+    data: string;
+  };
+}
+
 export default function SwapForm({ balance }: SwapFormProps) {
   const { isConnected, address } = useAppKitAccount();
   const { connection } = useAppKitConnection();
@@ -125,77 +131,181 @@ export default function SwapForm({ balance }: SwapFormProps) {
     }
   };
 
-  // Prepare transaction for signing (Updated to use swap instructions)
-  const prepareTransaction = async (swapData: OKXSwapInstructionsData, userAddress: string): Promise<VersionedTransaction> => {
+  // Prepare transaction for signing (Updated to handle both instructionLists and callData)
+  const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapData, userAddress: string): Promise<VersionedTransaction> => {
     try {
       if (!connection) {
         throw new Error("Solana connection is not available.");
       }
       const recentBlockhash = await connection.getLatestBlockhash('confirmed');
 
-      // Fetch Address Lookup Tables (LUTs)
-      const addressLookupTableAccounts: AddressLookupTableAccount[] = [];
-      if (swapData.addressLookupTableAccount && swapData.addressLookupTableAccount.length > 0) {
-        const lutPromises = swapData.addressLookupTableAccount.map(async (lutAddress) => {
-          try {
-            const lutPubkey = new PublicKey(lutAddress);
-            const lutAccount = await connection.getAddressLookupTable(lutPubkey);
-            return lutAccount.value;
-          } catch (error) {
-            console.error(`Error fetching LUT ${lutAddress}:`, error);
-            return null;
+      // Check if swapData contains instructionLists (from /swap-instruction)
+      if ('instructionLists' in swapData && 'addressLookupTableAccount' in swapData) {
+        const swapInstructionsData = swapData as OKXSwapInstructionsData;
+
+        // Fetch Address Lookup Tables (LUTs)
+        const addressLookupTableAccounts: AddressLookupTableAccount[] = [];
+        if (swapInstructionsData.addressLookupTableAccount && swapInstructionsData.addressLookupTableAccount.length > 0) {
+          const lutPromises = swapInstructionsData.addressLookupTableAccount.map(async (lutAddress) => {
+            try {
+              const lutPubkey = new PublicKey(lutAddress);
+              const lutAccount = await connection.getAddressLookupTable(lutPubkey);
+              return lutAccount.value;
+            } catch (error) {
+              console.error(`Error fetching LUT ${lutAddress}:`, error);
+              return null;
+            }
+          });
+          const lutResults = await Promise.all(lutPromises);
+          addressLookupTableAccounts.push(...lutResults.filter((lut): lut is AddressLookupTableAccount => lut !== null));
+        }
+
+        // Construct Transaction Instructions
+        const instructions: TransactionInstruction[] = [];
+
+        // Add compute budget and priority fee instructions
+        const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+          units: 300000,
+        });
+        const priorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: await getPriorityFee(),
+        });
+        instructions.push(computeBudgetIx, priorityFeeIx);
+
+        // Add swap instructions
+        swapInstructionsData.instructionLists.forEach((instr) => {
+          const accounts = instr.accounts.map((account) => ({
+            pubkey: new PublicKey(account.pubkey),
+            isSigner: account.isSigner,
+            isWritable: account.isWritable,
+          }));
+
+          const instruction = new TransactionInstruction({
+            keys: accounts,
+            programId: new PublicKey(instr.programId),
+            data: Buffer.from(instr.data, 'hex'),
+          });
+
+          instructions.push(instruction);
+        });
+
+        // Create a new MessageV0
+        const messageV0 = MessageV0.compile({
+          payerKey: new PublicKey(userAddress),
+          instructions,
+          recentBlockhash: recentBlockhash.blockhash,
+          addressLookupTableAccounts,
+        });
+
+        // Create a new VersionedTransaction
+        const transaction = new VersionedTransaction(messageV0);
+        console.log("Prepared transaction from instructionLists:", {
+          instructions: transaction.message.compiledInstructions.length,
+          staticAccountKeys: transaction.message.staticAccountKeys.map(key => key.toBase58()),
+          addressTableLookups: transaction.message.addressTableLookups,
+        });
+
+        return transaction;
+      } else if ('tx' in swapData && 'data' in swapData.tx) {
+        // Handle callData from /swap endpoint
+        const swapDataWithCallData = swapData as OKXSwapData;
+        const callData = swapDataWithCallData.tx.data;
+
+        console.log("Decoding callData:", callData);
+        const decodedTransaction = base58.decode(callData);
+        const tx = VersionedTransaction.deserialize(decodedTransaction);
+        console.log("Deserialized transaction:", {
+          message: tx.message,
+          signatures: tx.signatures,
+          staticAccountKeys: tx.message.staticAccountKeys.map(key => key.toBase58()),
+        });
+
+        const message = tx.message;
+
+        // Add compute budget and priority fee instructions
+        const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+          units: 300000,
+        });
+        const priorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: await getPriorityFee(),
+        });
+
+        if ('version' in message && message.version === 0) {
+          const messageV0 = message as MessageV0;
+
+          // Fetch Address Lookup Tables (LUTs) if present
+          const addressLookupTableAccounts: AddressLookupTableAccount[] = [];
+          if (messageV0.addressTableLookups && messageV0.addressTableLookups.length > 0) {
+            const lutPromises = messageV0.addressTableLookups.map(async (lookup) => {
+              try {
+                const lutPubkey = new PublicKey(lookup.accountKey);
+                const lutAccount = await connection.getAddressLookupTable(lutPubkey);
+                return lutAccount.value;
+              } catch (error) {
+                console.error(`Error fetching LUT ${lookup.accountKey.toBase58()}:`, error);
+                return null;
+              }
+            });
+            const lutResults = await Promise.all(lutPromises);
+            addressLookupTableAccounts.push(...lutResults.filter((lut): lut is AddressLookupTableAccount => lut !== null));
           }
-        });
-        const lutResults = await Promise.all(lutPromises);
-        addressLookupTableAccounts.push(...lutResults.filter((lut): lut is AddressLookupTableAccount => lut !== null));
+
+          const allInstructions: TransactionInstruction[] = [
+            computeBudgetIx,
+            priorityFeeIx,
+            ...messageV0.compiledInstructions.map((compiledIx) => {
+              if (compiledIx.programIdIndex >= messageV0.staticAccountKeys.length) {
+                throw new Error(`Invalid programIdIndex ${compiledIx.programIdIndex}. staticAccountKeys length: ${messageV0.staticAccountKeys.length}`);
+              }
+              const programId = messageV0.staticAccountKeys[compiledIx.programIdIndex];
+              if (!programId) {
+                throw new Error(`Program ID at index ${compiledIx.programIdIndex} is undefined`);
+              }
+
+              const keys = compiledIx.accountKeyIndexes.map((idx) => {
+                if (idx >= messageV0.staticAccountKeys.length) {
+                  throw new Error(`Invalid accountKeyIndex ${idx}. staticAccountKeys length: ${messageV0.staticAccountKeys.length}`);
+                }
+                const pubkey = messageV0.staticAccountKeys[idx];
+                if (!pubkey) {
+                  throw new Error(`Account key at index ${idx} is undefined`);
+                }
+                return {
+                  pubkey,
+                  isSigner: messageV0.isAccountSigner(idx),
+                  isWritable: messageV0.isAccountWritable(idx),
+                };
+              });
+
+              return new TransactionInstruction({
+                keys,
+                programId,
+                data: Buffer.from(compiledIx.data),
+              });
+            }),
+          ];
+
+          const newMessageV0 = MessageV0.compile({
+            payerKey: new PublicKey(userAddress),
+            instructions: allInstructions,
+            recentBlockhash: recentBlockhash.blockhash,
+            addressLookupTableAccounts,
+          });
+
+          const newTx = new VersionedTransaction(newMessageV0);
+          console.log("Prepared transaction from callData:", {
+            instructions: newTx.message.compiledInstructions.length,
+            staticAccountKeys: newTx.message.staticAccountKeys.map(key => key.toBase58()),
+            addressTableLookups: newTx.message.addressTableLookups,
+          });
+
+          return newTx;
+        } else {
+          throw new Error("Unsupported message version. Expected MessageV0.");
+        }
+      } else {
+        throw new Error("Invalid swap data format received from backend");
       }
-
-      // Construct Transaction Instructions
-      const instructions: TransactionInstruction[] = [];
-
-      // Add compute budget and priority fee instructions
-      const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
-        units: 300000,
-      });
-      const priorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({
-        microLamports: await getPriorityFee(),
-      });
-      instructions.push(computeBudgetIx, priorityFeeIx);
-
-      // Add swap instructions
-      swapData.instructionLists.forEach((instr) => {
-        const accounts = instr.accounts.map((account) => ({
-          pubkey: new PublicKey(account.pubkey),
-          isSigner: account.isSigner,
-          isWritable: account.isWritable,
-        }));
-
-        const instruction = new TransactionInstruction({
-          keys: accounts,
-          programId: new PublicKey(instr.programId),
-          data: Buffer.from(instr.data, 'hex'),
-        });
-
-        instructions.push(instruction);
-      });
-
-      // Create a new MessageV0
-      const messageV0 = MessageV0.compile({
-        payerKey: new PublicKey(userAddress),
-        instructions,
-        recentBlockhash: recentBlockhash.blockhash,
-        addressLookupTableAccounts,
-      });
-
-      // Create a new VersionedTransaction
-      const transaction = new VersionedTransaction(messageV0);
-      console.log("Prepared transaction:", {
-        instructions: transaction.message.compiledInstructions.length,
-        staticAccountKeys: transaction.message.staticAccountKeys.map(key => key.toBase58()),
-        addressTableLookups: transaction.message.addressTableLookups,
-      });
-
-      return transaction;
     } catch (error) {
       console.error("Error preparing transaction:", error);
       throw new Error("Failed to prepare transaction for signing: " + (error instanceof Error ? error.message : String(error)));
@@ -279,7 +389,7 @@ export default function SwapForm({ balance }: SwapFormProps) {
 
       // Step 1: Fetch swap instructions from backend
       console.log("Fetching swap instructions...");
-      const swapData: OKXSwapInstructionsData = await fetchSwapData(fromTokenAddress, toTokenAddress, amountInUnits, userAddress, slippage);
+      const swapData: OKXSwapInstructionsData | OKXSwapData = await fetchSwapData(fromTokenAddress, toTokenAddress, amountInUnits, userAddress, slippage);
 
       // Step 2: Prepare the transaction
       console.log("Preparing transaction...");
