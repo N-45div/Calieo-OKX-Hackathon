@@ -133,6 +133,37 @@ export default function SwapForm({ balance }: SwapFormProps) {
 
   // Prepare transaction for signing (Updated to handle both instructionLists and callData)
   // Prepare transaction for signing (Updated to handle LUTs correctly)
+// Helper function to check if two instructions are duplicates
+
+// Helper function to remove duplicate instructions
+const removeDuplicateInstructions = (instructions: TransactionInstruction[]): TransactionInstruction[] => {
+  const uniqueInstructions: TransactionInstruction[] = [];
+  const seen = new Set<string>();
+
+  for (const instr of instructions) {
+    const key = `${instr.programId.toBase58()}:${Buffer.from(instr.data).toString('hex')}:${instr.keys
+      .map(k => `${k.pubkey.toBase58()}:${k.isSigner}:${k.isWritable}`)
+      .join(',')}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueInstructions.push(instr);
+    } else {
+      console.log("Removed duplicate instruction:", {
+        programId: instr.programId.toBase58(),
+        data: Buffer.from(instr.data).toString('hex'),
+        keys: instr.keys.map(k => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
+      });
+    }
+  }
+
+  return uniqueInstructions;
+};
+
+// Prepare transaction for signing (Updated to remove duplicates)
 const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapData, userAddress: string): Promise<VersionedTransaction> => {
   try {
     if (!connection) {
@@ -175,9 +206,9 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
       const priorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({
         microLamports: await getPriorityFee(),
       });
-      instructions.push(computeBudgetIx, priorityFeeIx);
 
       // Add swap instructions
+      const swapInstructions: TransactionInstruction[] = [];
       swapInstructionsData.instructionLists.forEach((instr) => {
         const accounts = instr.accounts.map((account) => ({
           pubkey: new PublicKey(account.pubkey),
@@ -191,13 +222,50 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
           data: Buffer.from(instr.data, 'hex'),
         });
 
-        instructions.push(instruction);
+        swapInstructions.push(instruction);
       });
+
+      // Log swap instructions for debugging
+      console.log("Swap Instructions from /swap-instruction:", swapInstructions.map(instr => ({
+        programId: instr.programId.toBase58(),
+        data: Buffer.from(instr.data).toString('hex'),
+        keys: instr.keys.map(k => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
+      })));
+
+      // Check if compute budget instructions already exist
+      const hasComputeUnitLimit = swapInstructions.some(instr =>
+        instr.programId.equals(ComputeBudgetProgram.programId) &&
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '02' // setComputeUnitLimit discriminator
+      );
+      const hasComputeUnitPrice = swapInstructions.some(instr =>
+        instr.programId.equals(ComputeBudgetProgram.programId) &&
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '03' // setComputeUnitPrice discriminator
+      );
+
+      if (!hasComputeUnitLimit) instructions.push(computeBudgetIx);
+      if (!hasComputeUnitPrice) instructions.push(priorityFeeIx);
+      instructions.push(...swapInstructions);
+
+      // Remove duplicates
+      const uniqueInstructions = removeDuplicateInstructions(instructions);
+      console.log("Final Instructions after removing duplicates:", uniqueInstructions.map(instr => ({
+        programId: instr.programId.toBase58(),
+        data: Buffer.from(instr.data).toString('hex'),
+        keys: instr.keys.map(k => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
+      })));
 
       // Create a new MessageV0
       const messageV0 = MessageV0.compile({
         payerKey: new PublicKey(userAddress),
-        instructions,
+        instructions: uniqueInstructions,
         recentBlockhash: recentBlockhash.blockhash,
         addressLookupTableAccounts,
       });
@@ -230,7 +298,6 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
         });
       } catch (error) {
         console.warn("Failed to deserialize as VersionedTransaction, trying legacy transaction:", error);
-        // Fallback to legacy transaction
         const decodedTransaction = base58.decode(callData);
         const legacyTx = Transaction.from(decodedTransaction);
         console.log("Deserialized transaction as Legacy Transaction:", {
@@ -291,68 +358,99 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
         microLamports: await getPriorityFee(),
       });
 
-      // Resolve accounts using LUTs
-      const allInstructions: TransactionInstruction[] = [
-        computeBudgetIx,
-        priorityFeeIx,
-        ...messageV0.compiledInstructions.map((compiledIx) => {
-          if (compiledIx.programIdIndex >= messageV0.staticAccountKeys.length) {
-            throw new Error(`Invalid programIdIndex ${compiledIx.programIdIndex}. staticAccountKeys length: ${messageV0.staticAccountKeys.length}`);
-          }
-          const programId = messageV0.staticAccountKeys[compiledIx.programIdIndex];
-          if (!programId) {
-            throw new Error(`Program ID at index ${compiledIx.programIdIndex} is undefined`);
+      // Reconstruct instructions
+      const swapInstructions = messageV0.compiledInstructions.map((compiledIx) => {
+        if (compiledIx.programIdIndex >= messageV0.staticAccountKeys.length) {
+          throw new Error(`Invalid programIdIndex ${compiledIx.programIdIndex}. staticAccountKeys length: ${messageV0.staticAccountKeys.length}`);
+        }
+        const programId = messageV0.staticAccountKeys[compiledIx.programIdIndex];
+        if (!programId) {
+          throw new Error(`Program ID at index ${compiledIx.programIdIndex} is undefined`);
+        }
+
+        const keys = compiledIx.accountKeyIndexes.map((idx) => {
+          if (idx < messageV0.staticAccountKeys.length) {
+            const pubkey = messageV0.staticAccountKeys[idx];
+            if (!pubkey) {
+              throw new Error(`Account key at index ${idx} is undefined in staticAccountKeys`);
+            }
+            return {
+              pubkey,
+              isSigner: messageV0.isAccountSigner(idx),
+              isWritable: messageV0.isAccountWritable(idx),
+            };
           }
 
-          // Resolve account keys using staticAccountKeys and LUTs
-          const keys = compiledIx.accountKeyIndexes.map((idx) => {
-            // If idx is within staticAccountKeys, use it directly
-            if (idx < messageV0.staticAccountKeys.length) {
-              const pubkey = messageV0.staticAccountKeys[idx];
+          const lutIndex = idx - messageV0.staticAccountKeys.length;
+          let currentIndex = 0;
+          for (const lut of addressLookupTableAccounts) {
+            const lutAddresses = lut.state.addresses;
+            if (lutIndex >= currentIndex && lutIndex < currentIndex + lutAddresses.length) {
+              const addressIndex = lutIndex - currentIndex;
+              const pubkey = lutAddresses[addressIndex];
               if (!pubkey) {
-                throw new Error(`Account key at index ${idx} is undefined in staticAccountKeys`);
+                throw new Error(`Account key at LUT index ${addressIndex} in LUT ${lut.key.toBase58()} is undefined`);
               }
               return {
                 pubkey,
-                isSigner: messageV0.isAccountSigner(idx),
+                isSigner: false,
                 isWritable: messageV0.isAccountWritable(idx),
               };
             }
+            currentIndex += lutAddresses.length;
+          }
 
-            // Otherwise, resolve using LUTs
-            const lutIndex = idx - messageV0.staticAccountKeys.length;
-            let currentIndex = 0;
-            for (const lut of addressLookupTableAccounts) {
-              const lutAddresses = lut.state.addresses;
-              if (lutIndex >= currentIndex && lutIndex < currentIndex + lutAddresses.length) {
-                const addressIndex = lutIndex - currentIndex;
-                const pubkey = lutAddresses[addressIndex];
-                if (!pubkey) {
-                  throw new Error(`Account key at LUT index ${addressIndex} in LUT ${lut.key.toBase58()} is undefined`);
-                }
-                return {
-                  pubkey,
-                  isSigner: false, // LUT accounts are typically not signers
-                  isWritable: messageV0.isAccountWritable(idx),
-                };
-              }
-              currentIndex += lutAddresses.length;
-            }
+          throw new Error(`Invalid accountKeyIndex ${idx}. Could not resolve using staticAccountKeys (length: ${messageV0.staticAccountKeys.length}) or LUTs.`);
+        });
 
-            throw new Error(`Invalid accountKeyIndex ${idx}. Could not resolve using staticAccountKeys (length: ${messageV0.staticAccountKeys.length}) or LUTs.`);
-          });
+        return new TransactionInstruction({
+          keys,
+          programId,
+          data: Buffer.from(compiledIx.data),
+        });
+      });
 
-          return new TransactionInstruction({
-            keys,
-            programId,
-            data: Buffer.from(compiledIx.data),
-          });
-        }),
-      ];
+      // Log swap instructions for debugging
+      console.log("Swap Instructions from /swap:", swapInstructions.map(instr => ({
+        programId: instr.programId.toBase58(),
+        data: Buffer.from(instr.data).toString('hex'),
+        keys: instr.keys.map(k => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
+      })));
+
+      // Check for existing compute budget instructions
+      const hasComputeUnitLimit = swapInstructions.some(instr =>
+        instr.programId.equals(ComputeBudgetProgram.programId) &&
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '02' // setComputeUnitLimit discriminator
+      );
+      const hasComputeUnitPrice = swapInstructions.some(instr =>
+        instr.programId.equals(ComputeBudgetProgram.programId) &&
+        Buffer.from(instr.data).slice(0, 1).toString('hex') === '03' // setComputeUnitPrice discriminator
+      );
+
+      const allInstructions: TransactionInstruction[] = [];
+      if (!hasComputeUnitLimit) allInstructions.push(computeBudgetIx);
+      if (!hasComputeUnitPrice) allInstructions.push(priorityFeeIx);
+      allInstructions.push(...swapInstructions);
+
+      // Remove duplicates
+      const uniqueInstructions = removeDuplicateInstructions(allInstructions);
+      console.log("Final Instructions after removing duplicates:", uniqueInstructions.map(instr => ({
+        programId: instr.programId.toBase58(),
+        data: Buffer.from(instr.data).toString('hex'),
+        keys: instr.keys.map(k => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
+      })));
 
       const newMessageV0 = MessageV0.compile({
         payerKey: new PublicKey(userAddress),
-        instructions: allInstructions,
+        instructions: uniqueInstructions,
         recentBlockhash: recentBlockhash.blockhash,
         addressLookupTableAccounts,
       });
