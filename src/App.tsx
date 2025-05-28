@@ -9,7 +9,7 @@ import type { Provider } from '@reown/appkit-adapter-solana/react';
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { SolanaAdapter } from "@reown/appkit-adapter-solana/react";
 import { solana, solanaTestnet, solanaDevnet } from "@reown/appkit/networks";
-import './App.css';
+
 
 // Initialize Solana Connection
 const connection = new Connection("https://api.mainnet-beta.solana.com", {
