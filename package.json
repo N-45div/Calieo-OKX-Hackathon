@@ -14,6 +14,7 @@
     "@okx-dex/okx-dex-sdk": "^1.0.13",
     "@reown/appkit": "^1.7.7",
     "@reown/appkit-adapter-solana": "^1.7.7",
+    "@solana/spl-token": "^0.4.13",
     "@solana/wallet-adapter-base": "^0.9.26",
     "@solana/wallet-adapter-react": "^0.15.38",
     "@solana/wallet-adapter-react-ui": "^0.9.38",

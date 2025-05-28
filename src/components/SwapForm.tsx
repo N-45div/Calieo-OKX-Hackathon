@@ -6,6 +6,7 @@ import { ArrowDown, Loader2 } from "lucide-react";
 import axios from "axios";
 import { VersionedTransaction, ComputeBudgetProgram, PublicKey, TransactionInstruction, MessageV0, AddressLookupTableAccount , Transaction } from "@solana/web3.js";
 import base58 from "bs58";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 // Backend API URL (adjust based on your backend deployment)
 const BACKEND_API_URL = "http://localhost:3001";
@@ -164,10 +165,15 @@ const removeDuplicateInstructions = (instructions: TransactionInstruction[]): Tr
 };
 
 // Prepare transaction for signing (Updated to remove duplicates)
+
+// Prepare transaction for signing (Updated to log instructions and validate ATA)
 const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapData, userAddress: string): Promise<VersionedTransaction> => {
   try {
     if (!connection) {
       throw new Error("Solana connection is not available.");
+    }
+    if (!userAddress || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(userAddress)) {
+      throw new Error("Invalid user address provided for transaction preparation");
     }
     const recentBlockhash = await connection.getLatestBlockhash('confirmed');
 
@@ -261,6 +267,37 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
           isWritable: k.isWritable,
         })),
       })));
+
+      // Validate ATA instructions
+      const ataProgramId = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+      uniqueInstructions.forEach((instr, index) => {
+        if (instr.programId.equals(ataProgramId)) {
+          console.log(`Found ATA instruction at index ${index}:`, {
+            programId: instr.programId.toBase58(),
+            data: Buffer.from(instr.data).toString('hex'),
+            keys: instr.keys.map(k => ({
+              pubkey: k.pubkey.toBase58(),
+              isSigner: k.isSigner,
+              isWritable: k.isWritable,
+            })),
+          });
+          // Expected ATA address: keys[0] should be the ATA address
+          const ataAddress = instr.keys[0]?.pubkey;
+          const walletAddress = instr.keys[1]?.pubkey; // Usually the wallet address is the second key
+          const tokenMintAddress = instr.keys[2]?.pubkey; // Usually the token mint is the third key
+          if (ataAddress && walletAddress && tokenMintAddress) {
+            const expectedAtaAddress = getAssociatedTokenAddressSync(
+              new PublicKey(tokenMintAddress),
+              new PublicKey(walletAddress)
+            );
+            if (!ataAddress.equals(expectedAtaAddress)) {
+              throw new Error(
+                `Invalid ATA address in instruction ${index}. Expected ${expectedAtaAddress.toBase58()}, but got ${ataAddress.toBase58()}`
+              );
+            }
+          }
+        }
+      });
 
       // Create a new MessageV0
       const messageV0 = MessageV0.compile({
@@ -448,6 +485,36 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
         })),
       })));
 
+      // Validate ATA instructions
+      const ataProgramId = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+      uniqueInstructions.forEach((instr, index) => {
+        if (instr.programId.equals(ataProgramId)) {
+          console.log(`Found ATA instruction at index ${index}:`, {
+            programId: instr.programId.toBase58(),
+            data: Buffer.from(instr.data).toString('hex'),
+            keys: instr.keys.map(k => ({
+              pubkey: k.pubkey.toBase58(),
+              isSigner: k.isSigner,
+              isWritable: k.isWritable,
+            })),
+          });
+          const ataAddress = instr.keys[0]?.pubkey;
+          const walletAddress = instr.keys[1]?.pubkey;
+          const tokenMintAddress = instr.keys[2]?.pubkey;
+          if (ataAddress && walletAddress && tokenMintAddress) {
+            const expectedAtaAddress = getAssociatedTokenAddressSync(
+              new PublicKey(tokenMintAddress),
+              new PublicKey(walletAddress)
+            );
+            if (!ataAddress.equals(expectedAtaAddress)) {
+              throw new Error(
+                `Invalid ATA address in instruction ${index}. Expected ${expectedAtaAddress.toBase58()}, but got ${ataAddress.toBase58()}`
+              );
+            }
+          }
+        }
+      });
+
       const newMessageV0 = MessageV0.compile({
         payerKey: new PublicKey(userAddress),
         instructions: uniqueInstructions,
@@ -471,6 +538,7 @@ const prepareTransaction = async (swapData: OKXSwapInstructionsData | OKXSwapDat
     throw new Error("Failed to prepare transaction for signing: " + (error instanceof Error ? error.message : String(error)));
   }
 };
+
 
   // Fetch swap data from backend
   const fetchSwapData = async (fromTokenAddress: string, toTokenAddress: string, amount: string, userAddress: string, slippage: string) => {
