@@ -49,7 +49,7 @@ export default function ArbitrageOpportunities() {
     const [investmentAmount, setInvestmentAmount] = useState<number>(1000);
 
     // Use the backend URL from the environment variable
-    const BACKEND_URL = "http://localhost:3001";
+    const BACKEND_URL = "http://localhost:3001/";
 
     const defaultTokens = {
         "1": [

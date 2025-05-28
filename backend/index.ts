@@ -33,10 +33,10 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://mainnet.helius-rpc
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
 // OKX DEX API Configuration
-const OKX_API_KEY = process.env.OKX_API_KEY || "89741cb9-fa03-49b6-a6db-5b974a5f8fdf";
-const OKX_SECRET_KEY = process.env.OKX_SECRET_KEY || "6E769FF4CC4C695D9E91D216424D648A";
-const OKX_API_PASSPHRASE = process.env.OKX_API_PASSPHRASE || "Suresh@23";
-const OKX_PROJECT_ID = process.env.OKX_PROJECT_ID || "c38b1db0c8c646520faa9282dcf90717";
+const OKX_API_KEY = process.env.OKX_API_KEY || "a6fc5617-9e0f-4987-a6a3-d5a7418c7caf";
+const OKX_SECRET_KEY = process.env.OKX_SECRET_KEY || "4C33F9BA43D965660AA2C2F81716CA61";
+const OKX_API_PASSPHRASE = process.env.OKX_API_PASSPHRASE || "suresh@76sdthA";
+const OKX_PROJECT_ID = process.env.OKX_PROJECT_ID || "4e98d3b439e16bcb09cb98ea0a9524bf";
 const OKX_BASE_URL = "https://web3.okx.com";
 const SOLANA_CHAIN_INDEX = "501"; // Solana Mainnet chainIndex
 const SOLANA_CHAIN_ID = "501"; // Deprecated chainId

@@ -10,7 +10,7 @@ import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction 
 
 
 // Backend API URL (adjust based on your backend deployment)
-const BACKEND_API_URL = "http://localhost:3001";
+const BACKEND_API_URL = "http://localhost:3001/";
 
 interface SwapFormProps {
   walletProvider?: Provider;
