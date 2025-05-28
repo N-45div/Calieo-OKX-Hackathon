@@ -188,7 +188,7 @@ export default function SwapForm({ walletProvider, balance }: SwapFormProps) {
 
       // Step 2: Prepare and sign the transaction
       const transaction = await prepareTransaction(callData, userAddress);
-      const signature = await walletProvider.sendTransaction(transaction, connection);
+      await walletProvider.sendTransaction(transaction, connection);
       const signedTx = base58.encode(transaction.serialize());
 
       // Step 3: Execute the swap with the signed transaction
