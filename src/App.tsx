@@ -7,7 +7,8 @@ import ArbitrageOpportunities from "./components/Arbitrage";
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider } from '@reown/appkit/react';
 import type { Provider } from '@reown/appkit-adapter-solana/react';
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { projectId, metadata, solanaWeb3JsAdapter, networks } from './config';
+import { SolanaAdapter } from "@reown/appkit-adapter-solana/react";
+import { solana, solanaTestnet, solanaDevnet } from "@reown/appkit/networks";
 import './App.css';
 
 // Initialize Solana Connection
@@ -15,21 +16,27 @@ const connection = new Connection("https://api.mainnet-beta.solana.com", {
   confirmTransactionInitialTimeout: 30000,
 });
 
-// Initialize AppKit with enhanced dark theme
+const solanaWeb3JsAdapter = new SolanaAdapter();
+
+// 1. Get projectId from https://cloud.reown.com
+const projectId = "341513fbc5462fa836977524eba17c23";
+
+// 2. Create a metadata object - optional
+const metadata = {
+  name: "AppKit",
+  description: "AppKit Solana Example",
+  url: "https://example.com", // origin must match your domain & subdomain
+  icons: ["https://avatars.githubusercontent.com/u/179229932"],
+};
+
+// 3. Create modal
 createAppKit({
-  projectId,
-  metadata,
-  themeMode: 'dark',
-  networks,
   adapters: [solanaWeb3JsAdapter],
+  networks: [solana, solanaTestnet, solanaDevnet],
+  metadata: metadata,
+  projectId,
   features: {
-    analytics: true,
-  },
-  themeVariables: {
-    '--w3m-accent-color': '#00f6ff',
-    '--w3m-color-bg-1': '#0a0a0f',
-    '--w3m-color-fg-1': '#ffffff',
-    '--w3m-border-radius-master': '16px',
+    analytics: true, // Optional - defaults to your Cloud configuration
   },
 });
 
@@ -41,7 +48,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
 
   // Use correct hooks for wallet information
-  const { open } = useAppKit(); // For modal control
+  useAppKit(); // For modal control
   const { address, isConnected } = useAppKitAccount();
   const { walletProvider } = useAppKitProvider<Provider>('solana');
 
