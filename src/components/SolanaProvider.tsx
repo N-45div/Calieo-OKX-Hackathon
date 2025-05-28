@@ -1,50 +1,50 @@
-import  { type FC, type ReactNode, useMemo } from "react";
-import {
-    ConnectionProvider,
-    WalletProvider,
-} from "@solana/wallet-adapter-react";
-import { WalletAdapterNetwork } from "@solana/wallet-adapter-base";
-import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-import { clusterApiUrl } from "@solana/web3.js";
-import { 
-    PhantomWalletAdapter, 
-    SolflareWalletAdapter,
-    TorusWalletAdapter,
-    LedgerWalletAdapter
-} from "@solana/wallet-adapter-wallets";
+import { createAppKit } from "@reown/appkit";
+import { SolanaAdapter } from "@reown/appkit-adapter-solana";
+import { mainnet } from "@reown/appkit/networks";
+import { AppKitProvider } from "@reown/appkit/react";
+import { ReactNode, useEffect } from "react";
 
-// Import wallet adapter styles
-import "@solana/wallet-adapter-react-ui/styles.css";
-
-interface SolanaProviderProps {
-    children: ReactNode;
+// Initialize AppKit with Solana adapter
+const projectId = process.env.VITE_REOWN_PROJECT_ID || "your_project_id"; // Replace with your Reown project ID
+if (!projectId) {
+  throw new Error("Reown project ID is required. Set VITE_REOWN_PROJECT_ID in your .env file.");
 }
 
-export const SolanaProvider: FC<SolanaProviderProps> = ({ children }) => {
-    // Use Mainnet as requested
-    const network = WalletAdapterNetwork.Mainnet;
+const solanaAdapter = new SolanaAdapter({
+  networks: [mainnet], // You can add other networks if needed
+  walletConnectProjectId: projectId,
+});
 
-    // Memoize the endpoint to avoid unnecessary re-renders
-    const endpoint = useMemo(() => clusterApiUrl(network), [network]);
+const appKit = createAppKit({
+  adapters: [solanaAdapter],
+  networks: [mainnet],
+  projectId,
+  metadata: {
+    name: "Calieo",
+    description: "Solana Trading Bot Telegram Mini App",
+    url: "https://your-app-url.com", // Replace with your app URL
+    icons: ["https://your-app-url.com/icon.png"], // Replace with your app icon URL
+  },
+  features: {
+    analytics: true,
+    email: false,
+    socials: [],
+    walletFeatures: true,
+  },
+});
 
-    // Define wallets to support - include more popular wallets
-    const wallets = useMemo(
-        () => [
-            new PhantomWalletAdapter(),
-            new SolflareWalletAdapter({ network }),
-            new TorusWalletAdapter(),
-            new LedgerWalletAdapter(),
-        ],
-        [network]
-    );
+interface SolanaProviderProps {
+  children: ReactNode;
+}
 
-    return (
-        <ConnectionProvider endpoint={endpoint}>
-            <WalletProvider wallets={wallets} autoConnect={false}>
-                <WalletModalProvider>
-                    {children}
-                </WalletModalProvider>
-            </WalletProvider>
-        </ConnectionProvider>
-    );
-};
+export function SolanaProvider({ children }: SolanaProviderProps) {
+  useEffect(() => {
+    appKit.open();
+  }, []);
+
+  return (
+    <AppKitProvider appKit={appKit}>
+      {children}
+    </AppKitProvider>
+  );
+}

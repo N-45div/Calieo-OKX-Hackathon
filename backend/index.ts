@@ -1,11 +1,13 @@
-import express from 'express';
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import cors from 'cors';
 import axios from 'axios';
-import { Server } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import http from 'http';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, TokenAmount, TokenAccountBalancePair } from '@solana/web3.js';
 import cron from 'node-cron';
 import dotenv from 'dotenv';
+
 dotenv.config();
 
 const app = express();
@@ -24,39 +26,100 @@ app.use(cors());
 app.use(express.json());
 
 // Configuration
-const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
+const TWITTER_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAAFxqzQEAAAAAZPRCRDTeJ8uOt56coy0%2F3kmTZwo%3DtEwps4FR9lNh8DKt4C6rqGcGZ9b34n1GoN8fTX1bXzd0xgzW5e";
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
+// Interfaces
+interface Tweet {
+  id: string;
+  text: string;
+  created_at: string;
+  public_metrics: {
+    like_count: number;
+    retweet_count: number;
+  };
+  username: string;
+  author_id?: string; // Added for Twitter API v2 expansions
+}
+
+interface DexData {
+  price: number;
+  volume24h: number;
+  liquidity: number;
+  priceChange24h: number;
+  dexUrl: string;
+  verified: boolean;
+  marketCap: number;
+}
+
+interface TokenMetadata {
+  symbol: string;
+  name: string;
+  decimals: number;
+  supply: string | null;
+  holder: number | null;
+}
+
+interface ContractInfo {
+  address: string;
+  deployedAt: Date;
+  owner: string;
+  lamports: number;
+  supply: TokenAmount | null;
+  executable: boolean;
+  largestAccounts: TokenAccountBalancePair[];
+  holderRisk: number;
+  totalSignatures: number;
+}
+
+interface Contract {
+  address: string;
+  symbol: string;
+  name: string;
+  deployedAt: Date;
+  mentionedBy: string[];
+  tweets: Tweet[];
+  riskScore: number;
+  liquidityScore: number;
+  socialScore: number;
+  tags: string[];
+  verified: boolean;
+  marketCap: number;
+  holders: number;
+  description: string;
+  dexData: DexData | null;
+}
+
 // In-memory storage
-let contractsCache = [];
-let lastScanTime = null;
+let contractsCache: Contract[] = [];
+let lastScanTime: Date | null = null;
 let scanInProgress = false;
 
 // Alpha hunters to monitor (Twitter usernames)
-const ALPHA_HUNTERS = [
+const ALPHA_HUNTERS: string[] = [
   'degenspartan',
-  'SolBigBrain', 
+  'SolBigBrain',
   '0xSisyphus',
   'thedefiedge',
   'DegenTrades',
   'CryptoGodJohn',
-  'alphakek_',
+  'alphakek',
   'solana_daily',
   'OnChainWizard',
   'CryptoMillions',
   'SolanaLegend',
   'DegenAlpha',
   'SolanaNews',
-  'coin_flipper_',
+  'coinflipper',
   'TraderSZ',
   'SolanaFloor'
 ];
 
 // WebSocket connection handling
-io.on('connection', (socket) => {
+io.on('connection', (socket: Socket) => {
   console.log(`Client connected: ${socket.id}`);
-  
+
   // Send current data to new client
   socket.emit('contracts-update', {
     contracts: contractsCache,
@@ -90,12 +153,12 @@ const getTwitterHeaders = () => ({
 });
 
 // DexScreener API integration
-const getDexScreenerData = async (address) => {
+const getDexScreenerData = async (address: string): Promise<DexData | null> => {
   try {
     const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${address}`, {
       timeout: 5000
     });
-    
+
     if (response.data && response.data.pairs && response.data.pairs.length > 0) {
       const pair = response.data.pairs[0];
       return {
@@ -105,20 +168,22 @@ const getDexScreenerData = async (address) => {
         liquidity: parseFloat(pair.liquidity?.usd) || 0,
         priceChange24h: parseFloat(pair.priceChange?.h24) || 0,
         dexUrl: pair.url,
-        pairAddress: pair.pairAddress,
-        dexId: pair.dexId,
         verified: pair.info?.verified || false
       };
     }
     return null;
   } catch (error) {
-    console.error(`DexScreener API error for ${address}:`, error.message);
+    if (error instanceof Error) {
+      console.error(`DexScreener API error for ${address}:`, error.message);
+    } else {
+      console.error(`DexScreener API error for ${address}:`, error);
+    }
     return null;
   }
 };
 
 // Enhanced token metadata fetching
-const getTokenMetadata = async (address) => {
+const getTokenMetadata = async (address: string): Promise<TokenMetadata | null> => {
   try {
     // Try multiple sources for token metadata
     const sources = [
@@ -152,19 +217,23 @@ const getTokenMetadata = async (address) => {
       holder: null
     };
   } catch (error) {
-    console.error(`Error getting token metadata for ${address}:`, error.message);
+    if (error instanceof Error) {
+      console.error(`Error getting token metadata for ${address}:`, error.message);
+    } else {
+      console.error(`Error getting token metadata for ${address}:`, String(error));
+    }
     return null;
   }
 };
 
 // Extract Solana contract addresses from text using regex
-const extractSolanaAddresses = (text) => {
+const extractSolanaAddresses = (text: string): string[] => {
   // Enhanced regex for Solana addresses
   const solanaRegex = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
   const matches = text.match(solanaRegex) || [];
-  
+
   // Filter out common false positives and validate
-  return matches.filter(addr => {
+  return matches.filter((addr: string) => {
     try {
       new PublicKey(addr);
       // Additional filtering for common false positives
@@ -178,7 +247,7 @@ const extractSolanaAddresses = (text) => {
 };
 
 // Fetch recent tweets from alpha hunters with enhanced filtering
-const fetchAlphaHunterTweets = async (username, maxResults = 15) => {
+const fetchAlphaHunterTweets = async (username: string, maxResults: number = 15): Promise<Tweet[]> => {
   try {
     const url = `https://api.twitter.com/2/users/by/username/${username}`;
     const userResponse = await axios.get(url, { headers: getTwitterHeaders() });
@@ -187,7 +256,7 @@ const fetchAlphaHunterTweets = async (username, maxResults = 15) => {
     const tweetsUrl = `https://api.twitter.com/2/users/${userId}/tweets`;
     const params = {
       'max_results': maxResults,
-      'tweet.fields': 'created_at,public_metrics,context_annotations,entities,lang',
+      'tweet.fields': 'created_at,public_metrics,context_annotations,entities',
       'exclude': 'retweets,replies',
       'since_id': getLastTweetId(username) // Only get new tweets
     };
@@ -197,49 +266,55 @@ const fetchAlphaHunterTweets = async (username, maxResults = 15) => {
       params
     });
 
-    const tweets = response.data.data || [];
-    
+    const tweets: Tweet[] = response.data.data || [];
+
     // Filter for crypto-related content
-    return tweets.filter(tweet => {
-      if (!tweet.text || tweet.lang !== 'en') return false;
-      
+    return tweets.filter((tweet: Tweet) => {
+      if (!tweet.text) return false;
+
       const text = tweet.text.toLowerCase();
       const cryptoKeywords = [
-        'solana', 'sol', 'token', 'contract', 'mint', 'liquidity', 
+        'solana', 'sol', 'token', 'contract', 'mint', 'liquidity',
         'dex', 'trading', 'pump', 'moon', 'gem', 'alpha', 'ape',
         'launch', 'new', 'fresh', 'deployed', '$', 'CA:'
       ];
-      
+
       return cryptoKeywords.some(keyword => text.includes(keyword));
     });
-
   } catch (error) {
-    console.error(`Error fetching tweets for ${username}:`, error.response?.data || error.message);
+    if (error instanceof Error) {
+      console.error(`Error fetching tweets for ${username}:`, error.message);
+    } else {
+      console.error(`Error fetching tweets for ${username}:`, error);
+    }
     return [];
   }
 };
 
 // Simple cache for last tweet IDs (in production, use Redis)
-const tweetIdCache = new Map();
-const getLastTweetId = (username) => tweetIdCache.get(username);
-const setLastTweetId = (username, tweetId) => tweetIdCache.set(username, tweetId);
+const tweetIdCache = new Map<string, string>();
+const getLastTweetId = (username: string): string | undefined => tweetIdCache.get(username);
+const setLastTweetId = (username: string, tweetId: string): void => {
+  tweetIdCache.set(username, tweetId);
+};
 
 // Get contract information from Solana with enhanced data
-const getContractInfo = async (address) => {
+const getContractInfo = async (address: string): Promise<ContractInfo | null> => {
   try {
     const pubkey = new PublicKey(address);
-    
+
     // Get account info
     const accountInfo = await connection.getAccountInfo(pubkey);
     if (!accountInfo) return null;
 
     // Get token supply and largest accounts
-    let supply = null;
-    let largestAccounts = [];
+    let supply: TokenAmount | null = null;
+    let largestAccounts: TokenAccountBalancePair[] = [];
+
     try {
       const tokenSupply = await connection.getTokenSupply(pubkey);
       supply = tokenSupply.value;
-      
+
       const largestTokenAccounts = await connection.getTokenLargestAccounts(pubkey);
       largestAccounts = largestTokenAccounts.value;
     } catch (e) {
@@ -248,9 +323,9 @@ const getContractInfo = async (address) => {
 
     // Get transaction signatures to determine deployment time
     const signatures = await connection.getSignaturesForAddress(pubkey, { limit: 1000 });
-    const deployedAt = signatures.length > 0 ? 
-      new Date(signatures[signatures.length - 1].blockTime * 1000) : 
-      new Date();
+    const deployedAt = signatures.length > 0
+      ? new Date((signatures[signatures.length - 1].blockTime ?? 0) * 1000)
+      : new Date();
 
     // Calculate holder concentration risk
     const holderRisk = calculateHolderRisk(largestAccounts, supply);
@@ -267,21 +342,25 @@ const getContractInfo = async (address) => {
       totalSignatures: signatures.length
     };
   } catch (error) {
-    console.error(`Error getting contract info for ${address}:`, error.message);
+    if (error instanceof Error) {
+      console.error(`Error getting contract info for ${address}:`, error.message);
+    } else {
+      console.error(`Error getting contract info for ${address}:`, error);
+    }
     return null;
   }
 };
 
 // Calculate holder concentration risk
-const calculateHolderRisk = (largestAccounts, supply) => {
+const calculateHolderRisk = (largestAccounts: TokenAccountBalancePair[], supply: TokenAmount | null): number => {
   if (!largestAccounts || !supply || largestAccounts.length === 0) return 50;
-  
+
   const totalSupply = parseFloat(supply.amount);
-  const top5Holdings = largestAccounts.slice(0, 5).reduce((sum, account) => 
+  const top5Holdings = largestAccounts.slice(0, 5).reduce((sum: number, account: TokenAccountBalancePair) =>
     sum + parseFloat(account.amount), 0);
-  
+
   const concentrationRatio = (top5Holdings / totalSupply) * 100;
-  
+
   // High concentration = high risk
   if (concentrationRatio > 80) return 90;
   if (concentrationRatio > 60) return 70;
@@ -291,7 +370,7 @@ const calculateHolderRisk = (largestAccounts, supply) => {
 };
 
 // Enhanced risk score calculation
-const calculateRiskScore = (contractInfo, tweetData, mentions, dexData, tokenMeta) => {
+const calculateRiskScore = (contractInfo: ContractInfo, tweetData: Tweet[], mentions: string[], dexData: DexData | null, tokenMeta: TokenMetadata): number => {
   let riskScore = 50; // Base risk
 
   // Age factor (newer = riskier)
@@ -307,10 +386,10 @@ const calculateRiskScore = (contractInfo, tweetData, mentions, dexData, tokenMet
   else if (mentions.length === 1) riskScore += 20;
 
   // Social engagement factor
-  const totalEngagement = tweetData.reduce((sum, tweet) => 
-    sum + (tweet.public_metrics?.like_count || 0) + 
+  const totalEngagement = tweetData.reduce((sum: number, tweet: Tweet) =>
+    sum + (tweet.public_metrics?.like_count || 0) +
     (tweet.public_metrics?.retweet_count || 0), 0);
-  
+
   if (totalEngagement > 500) riskScore -= 20;
   else if (totalEngagement > 100) riskScore -= 10;
   else if (totalEngagement < 10) riskScore += 15;
@@ -343,8 +422,8 @@ const calculateRiskScore = (contractInfo, tweetData, mentions, dexData, tokenMet
 };
 
 // Enhanced tag generation
-const generateTags = (contractInfo, riskScore, ageMinutes, mentions, dexData) => {
-  const tags = [];
+const generateTags = (contractInfo: ContractInfo, riskScore: number, ageMinutes: number, mentions: string[], dexData: DexData | null): string[] => {
+  const tags: string[] = [];
 
   if (riskScore < 30) tags.push('LOW_RISK');
   else if (riskScore > 70) tags.push('HIGH_RISK');
@@ -355,10 +434,10 @@ const generateTags = (contractInfo, riskScore, ageMinutes, mentions, dexData) =>
 
   if (mentions.length > 4) tags.push('TRENDING');
   else if (mentions.length > 2) tags.push('POPULAR');
-  
+
   // Check if mentioned by top alpha hunters
   const topHunters = ['degenspartan', 'SolBigBrain', '0xSisyphus', 'thedefiedge'];
-  if (mentions.some(m => topHunters.includes(m))) {
+  if (mentions.some((m: string) => topHunters.includes(m))) {
     tags.push('ALPHA_HUNTER');
   }
 
@@ -377,7 +456,7 @@ const generateTags = (contractInfo, riskScore, ageMinutes, mentions, dexData) =>
 };
 
 // Main scanning function
-const performScan = async () => {
+const performScan = async (): Promise<void> => {
   if (scanInProgress) {
     console.log('Scan already in progress, skipping...');
     return;
@@ -385,85 +464,89 @@ const performScan = async () => {
 
   scanInProgress = true;
   console.log('🔍 Starting enhanced contract scan...');
-  
+
   // Broadcast scan start
   io.emit('scan-status', { inProgress: true, stage: 'Fetching tweets...' });
 
   try {
-    const allTweets = [];
-    const contractAddresses = new Set();
-    const mentionMap = new Map();
-    const tweetMap = new Map();
+    const allTweets: Tweet[] = [];
+    const contractAddresses = new Set<string>();
+    const mentionMap = new Map<string, string[]>();
+    const tweetMap = new Map<string, Tweet[]>();
 
     // Fetch tweets from all alpha hunters
     for (const [index, hunter] of ALPHA_HUNTERS.entries()) {
       try {
-        io.emit('scan-status', { 
-          inProgress: true, 
-          stage: `Scanning ${hunter} (${index + 1}/${ALPHA_HUNTERS.length})...` 
+        io.emit('scan-status', {
+          inProgress: true,
+          stage: `Scanning ${hunter} (${index + 1}/${ALPHA_HUNTERS.length})...`
         });
 
         const tweets = await fetchAlphaHunterTweets(hunter, 20);
-        
+
         // Update last tweet ID for next scan
         if (tweets.length > 0) {
           setLastTweetId(hunter, tweets[0].id);
         }
-        
+
         for (const tweet of tweets) {
           if (!tweet.text) continue;
-          
+
           const addresses = extractSolanaAddresses(tweet.text);
-          
+
           for (const address of addresses) {
             contractAddresses.add(address);
-            
+
             if (!mentionMap.has(address)) {
               mentionMap.set(address, []);
             }
-            if (!mentionMap.get(address).includes(hunter)) {
-              mentionMap.get(address).push(hunter);
+            if (!mentionMap.get(address)!.includes(hunter)) {
+              mentionMap.get(address)!.push(hunter);
             }
-            
+
             if (!tweetMap.has(address)) {
               tweetMap.set(address, []);
             }
-            tweetMap.get(address).push({
+            tweetMap.get(address)!.push({
               ...tweet,
               username: hunter
             });
           }
         }
-        
+
         allTweets.push(...tweets);
-        
+
         // Rate limiting
         await new Promise(resolve => setTimeout(resolve, 1200));
-        
+
       } catch (error) {
-        console.error(`Failed to fetch tweets for ${hunter}:`, error.message);
+        if (error instanceof Error) {
+          console.error(`Failed to fetch tweets for ${hunter}:`, error.message);
+        } else {
+          console.error(`Failed to fetch tweets for ${hunter}:`, error);
+        }
         continue;
       }
     }
 
     console.log(`Found ${contractAddresses.size} unique contract addresses`);
-    io.emit('scan-status', { 
-      inProgress: true, 
-      stage: `Processing ${contractAddresses.size} contracts...` 
+    io.emit('scan-status', {
+      inProgress: true,
+      stage: `Processing ${contractAddresses.size} contracts...`
     });
 
     // Process each contract with enhanced data
-    const contracts = [];
+    const contracts: Contract[] = [];
     let processedCount = 0;
 
     for (const address of contractAddresses) {
       try {
         processedCount++;
-        
+
         if (processedCount % 5 === 0) {
-          io.emit('scan-status', { 
-            inProgress: true, 
-            stage: `Processing contracts... (${processedCount}/${contractAddresses.size})` 
+          io.emit('scan-status', {
+            inProgress: true,
+            stage: `Processing contracts... (${processedCount}/${contractAddresses.size})`
           });
         }
 
@@ -473,28 +556,28 @@ const performScan = async () => {
 
         const mentions = mentionMap.get(address) || [];
         const tweets = tweetMap.get(address) || [];
-        
+
         const ageMinutes = (Date.now() - contractInfo.deployedAt.getTime()) / (1000 * 60);
-        
+
         // Skip very old contracts unless highly mentioned
         if (ageMinutes > 10080 && mentions.length < 3) continue;
 
         // Get DexScreener data
         const dexData = await getDexScreenerData(address);
-        
+
         // Get token metadata
         const tokenMeta = await getTokenMetadata(address);
         if (!tokenMeta) continue;
 
         const riskScore = calculateRiskScore(contractInfo, tweets, mentions, dexData, tokenMeta);
         const tags = generateTags(contractInfo, riskScore, ageMinutes, mentions, dexData);
-        
+
         // Calculate enhanced scores
-        const socialScore = Math.min(100, mentions.length * 12 + 
-          tweets.reduce((sum, t) => sum + (t.public_metrics?.like_count || 0), 0) / 15);
-        
-        const liquidityScore = dexData ? 
-          Math.min(100, Math.max(10, (dexData.liquidity / 1000))) : 
+        const socialScore = Math.min(100, mentions.length * 12 +
+          tweets.reduce((sum: number, t: Tweet) => sum + (t.public_metrics?.like_count || 0), 0) / 15);
+
+        const liquidityScore = dexData ?
+          Math.min(100, Math.max(10, (dexData.liquidity / 1000))) :
           Math.max(20, 100 - riskScore);
 
         contracts.push({
@@ -503,7 +586,7 @@ const performScan = async () => {
           name: tokenMeta.name,
           deployedAt: contractInfo.deployedAt,
           mentionedBy: mentions,
-          tweets: tweets.map(t => ({
+          tweets: tweets.map((t: Tweet) => ({
             id: t.id,
             text: t.text,
             created_at: t.created_at,
@@ -520,26 +603,24 @@ const performScan = async () => {
           description: `${tokenMeta.name} mentioned by ${mentions.join(', ')}. ${
             dexData ? `$${dexData.price.toFixed(6)} | Vol: $${dexData.volume24h.toLocaleString()}` : 'No trading data'
           }`,
-          dexData: dexData ? {
-            price: dexData.price,
-            volume24h: dexData.volume24h,
-            liquidity: dexData.liquidity,
-            priceChange24h: dexData.priceChange24h,
-            dexUrl: dexData.dexUrl
-          } : null
+          dexData
         });
 
         // Rate limiting
         await new Promise(resolve => setTimeout(resolve, 300));
-        
+
       } catch (error) {
-        console.error(`Error processing contract ${address}:`, error.message);
+        if (error instanceof Error) {
+          console.error(`Error processing contract ${address}:`, error.message);
+        } else {
+          console.error(`Error processing contract ${address}:`, error);
+        }
         continue;
       }
     }
 
     // Sort by multiple factors: risk score, mentions, age
-    contracts.sort((a, b) => {
+    contracts.sort((a: Contract, b: Contract) => {
       const aScore = (a.mentionedBy.length * 10) + (100 - a.riskScore) + (a.socialScore / 10);
       const bScore = (b.mentionedBy.length * 10) + (100 - b.riskScore) + (b.socialScore / 10);
       return bScore - aScore;
@@ -548,7 +629,6 @@ const performScan = async () => {
     // Update cache
     contractsCache = contracts;
     lastScanTime = new Date();
-
     console.log(`✅ Scan completed: ${contracts.length} contracts processed`);
 
     // Broadcast results to all connected clients
@@ -564,129 +644,122 @@ const performScan = async () => {
         fresh: contracts.filter(c => c.tags.includes('FRESH') || c.tags.includes('ULTRA_FRESH')).length
       }
     });
-
   } catch (error) {
-    console.error('Scan error:', error);
-    io.emit('scan-error', { error: error.message });
+    if (error instanceof Error) {
+      console.error('Scan error:', error);
+      io.emit('scan-error', { error: error.message });
+    } else {
+      console.error('Scan error:', error);
+      io.emit('scan-error', { error: String(error) });
+    }
   } finally {
     scanInProgress = false;
     io.emit('scan-status', { inProgress: false, lastScan: lastScanTime });
   }
 };
 
+// Helper to handle async Express handlers with generic params
+const asyncHandler = <P = any, ResBody = any, ReqBody = any, ReqQuery = any>(
+  fn: (req: Request<P, ResBody, ReqBody, ReqQuery>, res: Response<ResBody>, next: NextFunction) => Promise<void | Response<ResBody>>
+): RequestHandler => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req as Request<P, ResBody, ReqBody, ReqQuery>, res as Response<ResBody>, next))
+      .catch(next);
+  };
+};
+
 // REST API Endpoints
-
 // Main scan endpoint (now uses cached data)
-app.get('/api/scan', async (req, res) => {
-  try {
-    if (contractsCache.length === 0 && !scanInProgress) {
-      // If no cached data and no scan in progress, start one
-      performScan();
-    }
-
-    res.json({
-      success: true,
-      data: contractsCache,
-      meta: {
-        total: contractsCache.length,
-        lastUpdate: lastScanTime,
-        scanInProgress,
-        stats: {
-          lowRisk: contractsCache.filter(c => c.riskScore < 30).length,
-          trending: contractsCache.filter(c => c.tags.includes('TRENDING')).length,
-          fresh: contractsCache.filter(c => c.tags.includes('FRESH') || c.tags.includes('ULTRA_FRESH')).length
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Scan endpoint error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get contracts',
-      message: error.message
-    });
+app.get('/api/scan', asyncHandler(async (req: Request, res: Response) => {
+  if (contractsCache.length === 0 && !scanInProgress) {
+    // If no cached data and no scan in progress, start one
+    await performScan();
   }
-});
+
+  res.json({
+    success: true,
+    data: contractsCache,
+    meta: {
+      total: contractsCache.length,
+      lastUpdate: lastScanTime,
+      scanInProgress,
+      stats: {
+        lowRisk: contractsCache.filter(c => c.riskScore < 30).length,
+        trending: contractsCache.filter(c => c.tags.includes('TRENDING')).length,
+        fresh: contractsCache.filter(c => c.tags.includes('FRESH') || c.tags.includes('ULTRA_FRESH')).length
+      }
+    }
+  });
+}));
 
 // Enhanced contract details endpoint
-app.get('/api/contract/:address', async (req, res) => {
-  try {
-    const { address } = req.params;
-    
-    // Check cache first
-    const cachedContract = contractsCache.find(c => c.address === address);
-    
-    const contractInfo = await getContractInfo(address);
-    if (!contractInfo) {
-      return res.status(404).json({
-        success: false,
-        error: 'Contract not found'
-      });
-    }
+app.get('/api/contract/:address', asyncHandler<{ address: string }>(async (req: Request<{ address: string }>, res: Response) => {
+  const { address } = req.params;
 
-    // Get fresh DexScreener data
-    const dexData = await getDexScreenerData(address);
-    
-    // Search for recent tweets mentioning this contract
-    const searchQuery = `${address} OR CA:${address}`;
-    const searchUrl = 'https://api.twitter.com/2/tweets/search/recent';
-    
-    const response = await axios.get(searchUrl, {
-      headers: getTwitterHeaders(),
-      params: {
-        query: searchQuery,
-        'tweet.fields': 'created_at,public_metrics,author_id',
-        'user.fields': 'username',
-        'expansions': 'author_id',
-        max_results: 100
-      }
-    });
+  // Check cache first
+  const cachedContract = contractsCache.find(c => c.address === address);
 
-    const tweets = response.data.data || [];
-    const users = response.data.includes?.users || [];
-    
-    const userMap = users.reduce((map, user) => {
-      map[user.id] = user.username;
-      return map;
-    }, {});
-
-    const enrichedTweets = tweets.map(tweet => ({
-      ...tweet,
-      username: userMap[tweet.author_id] || 'unknown'
-    }));
-
-    res.json({
-      success: true,
-      data: {
-        contract: {
-          ...contractInfo,
-          cached: cachedContract || null,
-          dexData
-        },
-        tweets: enrichedTweets,
-        stats: {
-          totalMentions: tweets.length,
-          totalEngagement: tweets.reduce((sum, t) => 
-            sum + (t.public_metrics?.like_count || 0) + 
-            (t.public_metrics?.retweet_count || 0), 0),
-          uniqueUsers: new Set(enrichedTweets.map(t => t.username)).size
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Contract details error:', error);
-    res.status(500).json({
+  const contractInfo = await getContractInfo(address);
+  if (!contractInfo) {
+    return res.status(404).json({
       success: false,
-      error: 'Failed to get contract details',
-      message: error.message
+      error: 'Contract not found'
     });
   }
-});
+
+  // Get fresh DexScreener data
+  const dexData = await getDexScreenerData(address);
+
+  // Search for recent tweets mentioning this contract
+  const searchQuery = `${address} OR CA:${address}`;
+  const searchUrl = 'https://api.twitter.com/2/tweets/search/recent';
+
+  const response = await axios.get(searchUrl, {
+    headers: getTwitterHeaders(),
+    params: {
+      query: searchQuery,
+      'tweet.fields': 'created_at,public_metrics,author_id',
+      'user.fields': 'username',
+      'expansions': 'author_id',
+      max_results: 100
+    }
+  });
+
+  const tweets: Tweet[] = response.data.data || [];
+  const users: Array<{ id: string; username: string }> = response.data.includes?.users || [];
+
+  const userMap = users.reduce((map: { [key: string]: string }, user: { id: string; username: string }) => {
+    map[user.id] = user.username;
+    return map;
+  }, {});
+
+  const enrichedTweets = tweets.map((tweet: Tweet) => ({
+    ...tweet,
+    username: userMap[tweet.author_id!] || 'unknown'
+  }));
+
+  res.json({
+    success: true,
+    data: {
+      contract: {
+        ...contractInfo,
+        cached: cachedContract || null,
+        dexData
+      },
+      tweets: enrichedTweets,
+      stats: {
+        totalMentions: tweets.length,
+        totalEngagement: tweets.reduce((sum: number, t: Tweet) =>
+          sum + (t.public_metrics?.like_count || 0) +
+          (t.public_metrics?.retweet_count || 0), 0),
+        uniqueUsers: new Set(enrichedTweets.map((t: { username: string }) => t.username)).size
+      }
+    }
+  });
+}));
 
 // WebSocket status endpoint
-app.get('/api/status', (req, res) => {
+app.get('/api/status', (req: Request, res: Response) => {
   res.json({
     success: true,
     data: {
@@ -700,26 +773,27 @@ app.get('/api/status', (req, res) => {
 });
 
 // Manual scan trigger
-app.post('/api/scan/trigger', async (req, res) => {
+app.post('/api/scan/trigger', asyncHandler(async (req: Request, res: Response) => {
   if (scanInProgress) {
-    return res.status(429).json({
+    res.status(429).json({
       success: false,
       error: 'Scan already in progress'
     });
+    return;
   }
 
   // Start scan in background
-  performScan();
-  
+  await performScan();
+
   res.json({
     success: true,
     message: 'Scan started',
     estimatedDuration: '2-3 minutes'
   });
-});
+}));
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     success: true,
     status: 'healthy',
@@ -739,7 +813,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Get list of monitored alpha hunters
-app.get('/api/hunters', (req, res) => {
+app.get('/api/hunters', (req: Request, res: Response) => {
   res.json({
     success: true,
     data: ALPHA_HUNTERS.map(hunter => ({
@@ -751,7 +825,7 @@ app.get('/api/hunters', (req, res) => {
 });
 
 // Error handling middleware
-app.use((error, req, res, next) => {
+app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   console.error('Server error:', error);
   res.status(500).json({
     success: false,
@@ -761,13 +835,13 @@ app.use((error, req, res, next) => {
 });
 
 // 404 handler
-app.use((req, res) => {
+app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,
     error: 'Endpoint not found',
     availableEndpoints: [
       'GET /api/scan',
-      'GET /api/contract/:address', 
+      'GET /api/contract/:address',
       'GET /api/health',
       'GET /api/hunters',
       'GET /api/status',
@@ -789,7 +863,7 @@ server.listen(PORT, () => {
   console.log(`⚡ Solana RPC: ${SOLANA_RPC_URL}`);
   console.log(`🔄 Auto-scan every 10 minutes`);
   console.log(`🌐 WebSocket server ready for real-time updates`);
-  
+
   // Initial scan on startup
   setTimeout(() => {
     console.log('🎯 Starting initial scan...');

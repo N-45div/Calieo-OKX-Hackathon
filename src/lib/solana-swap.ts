@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import base58 from "bs58";
-import { Connection, Transaction, VersionedTransaction, ComputeBudgetProgram, Keypair, PublicKey, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, Transaction, VersionedTransaction, ComputeBudgetProgram, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import CryptoJS from "crypto-js";
 import axios from "axios";
-import type { WalletContextState } from "@solana/wallet-adapter-react";
+import type { Provider } from "@reown/appkit-adapter-solana/react";
 
 // Constants
 const SOLANA_CHAIN_ID = "501"; // Solana Mainnet
@@ -12,10 +12,10 @@ const POLLING_INTERVAL = 5000;
 const BASE_URL = "https://web3.okx.com";
 
 // API Credentials (Hardcoded for simplicity; use a backend in production)
-const apiKey=process.env.VITE_OKX_API_KEY || "";
-const secretKey=process.env.VITE_OKX_SECRET_KEY || "";
-const apiPassphrase=process.env.VITE_OKX_API_PASSPHRASE || "";
-const projectId=process.env.VITE_OKX_PROJECT_ID || "";
+const apiKey = "8374cd83-9b4a-4faf-b116-adb8fc07cb0e";
+const secretKey = "44cT@y683ZsvSLb";
+const apiPassphrase = "EE6C34274CB518F1B5C4CED4B0106C68";
+const projectId = "c38b1db0c8c646520faa9282dcf90717";
 
 // Rate limiting configuration
 const RATE_LIMIT = {
@@ -40,12 +40,6 @@ const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=2d897
 const tokenInfoCache: Map<string, { data: TokenInfo; timestamp: number }> = new Map();
 const quoteCache: Map<string, { data: QuoteData; timestamp: number }> = new Map();
 const CACHE_DURATION = 30 * 60 * 1000;
-
-// Program ID for account abstraction
-const PROGRAM_ID = new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
-
-// Relayer Keypair (mocked; in production, manage this securely on a backend)
-const RELAYER_KEYPAIR = Keypair.generate(); // This should be a backend-managed keypair
 
 // Rate limiting function
 async function enforceRateLimit(): Promise<void> {
@@ -145,78 +139,12 @@ function validateQuoteData(data: any): boolean {
            validateTokenInfo(data);
 }
 
-// Account Abstraction Functions
-async function getUserPDA(userPublicKey: PublicKey): Promise<PublicKey> {
-    const [userPDA, _] = await PublicKey.findProgramAddress(
-        [
-            Buffer.from("user_account"),
-            userPublicKey.toBuffer(),
-        ],
-        PROGRAM_ID
-    );
-    return userPDA;
-}
-
-async function initializeUserAccount(userPublicKey: PublicKey, wallet: WalletContextState): Promise<string> {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-        throw new Error("Wallet not connected or does not support transaction signing");
-    }
-
-    const userPDA = await getUserPDA(userPublicKey);
-    const transaction = new Transaction().add(
-        SystemProgram.createAccount({
-            fromPubkey: userPublicKey,
-            newAccountPubkey: userPDA,
-            lamports: LAMPORTS_PER_SOL * 0.1, // Allocate some SOL for rent
-            space: 165, // Space for account data (adjust based on your needs)
-            programId: PROGRAM_ID,
-        })
-    );
-
-    const recentBlockhash = await connection.getLatestBlockhash('confirmed');
-    transaction.recentBlockhash = recentBlockhash.blockhash;
-    transaction.feePayer = userPublicKey;
-
-    const signedTx = await wallet.signTransaction(transaction);
-    const signature = await connection.sendRawTransaction(signedTx.serialize());
-    await connection.confirmTransaction(signature, 'confirmed');
-
-    console.log(`User account initialized at PDA: ${userPDA.toBase58()}`);
-    return signature;
-}
-
-async function depositToPDA(userPublicKey: PublicKey, amountLamports: number, wallet: WalletContextState): Promise<string> {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-        throw new Error("Wallet not connected or does not support transaction signing");
-    }
-
-    const userPDA = await getUserPDA(userPublicKey);
-    const transaction = new Transaction().add(
-        SystemProgram.transfer({
-            fromPubkey: userPublicKey,
-            toPubkey: userPDA,
-            lamports: amountLamports,
-        })
-    );
-
-    const recentBlockhash = await connection.getLatestBlockhash('confirmed');
-    transaction.recentBlockhash = recentBlockhash.blockhash;
-    transaction.feePayer = userPublicKey;
-
-    const signedTx = await wallet.signTransaction(transaction);
-    const signature = await connection.sendRawTransaction(signedTx.serialize());
-    await connection.confirmTransaction(signature, 'confirmed');
-
-    console.log(`Deposited ${amountLamports} lamports to PDA: ${userPDA.toBase58()}`);
-    return signature;
-}
-
 interface TokenInfo {
     fromToken: { symbol: string; decimals: number; price: string };
     toToken: { symbol: string; decimals: number; price: string };
 }
 
-interface QuoteData {
+export interface QuoteData {
     toAmount: string;
     fromToken: { symbol: string; decimals: number; price: string };
     toToken: { symbol: string; decimals: number; price: string };
@@ -455,10 +383,11 @@ async function getSwapData(
     return swapData;
 }
 
-async function prepareTransaction(callData: string, userPDA: PublicKey): Promise<Transaction | VersionedTransaction> {
+async function prepareTransaction(callData: string, userAddress: string): Promise<Transaction | VersionedTransaction> {
     try {
         const decodedTransaction = base58.decode(callData);
         const recentBlockhash = await connection.getLatestBlockhash('confirmed');
+        const userPublicKey = new PublicKey(userAddress);
         
         let tx: Transaction | VersionedTransaction;
         try {
@@ -471,11 +400,10 @@ async function prepareTransaction(callData: string, userPDA: PublicKey): Promise
             tx.recentBlockhash = recentBlockhash.blockhash;
         }
 
-        // Update fee payer to relayer for gasless transaction
+        // Add compute budget instructions
         if (tx instanceof Transaction) {
-            tx.feePayer = RELAYER_KEYPAIR.publicKey;
+            tx.feePayer = userPublicKey;
 
-            // Add compute budget instructions
             const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
                 units: 300000,
             });
@@ -483,44 +411,16 @@ async function prepareTransaction(callData: string, userPDA: PublicKey): Promise
                 microLamports: await getPriorityFee(),
             });
 
-            // Add a custom instruction to execute the swap from the PDA
-            const swapInstruction = new TransactionInstruction({
-                keys: [
-                    { pubkey: userPDA, isSigner: false, isWritable: true },
-                    { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
-                ],
-                programId: PROGRAM_ID,
-                data: Buffer.from("swap", "utf-8"), // Mock instruction data; in production, this would be serialized instruction data
-            });
-
-            tx.add(computeBudgetIx, priorityFeeIx, swapInstruction);
+            tx.add(computeBudgetIx, priorityFeeIx);
         } else {
-            // For VersionedTransaction, we can't modify the fee payer directly; this is a limitation
-            console.warn("VersionedTransaction detected; fee payer cannot be updated to relayer. Gasless feature may not work as expected.");
+            // For VersionedTransaction, ensure the fee payer is correct
+            console.log("VersionedTransaction detected; ensuring fee payer is user.");
         }
 
         return tx;
     } catch (error) {
         console.error("Error preparing transaction:", error);
         throw new Error("Failed to prepare transaction for signing");
-    }
-}
-
-async function signTransaction(tx: Transaction | VersionedTransaction): Promise<Transaction | VersionedTransaction> {
-    try {
-        console.log("Signing transaction with relayer...");
-        if (tx instanceof Transaction) {
-            tx.partialSign(RELAYER_KEYPAIR);
-            console.log("Transaction signed successfully by relayer");
-            return tx;
-        } else {
-            // For VersionedTransaction, we can't partial sign with a Keypair directly
-            console.warn("VersionedTransaction detected; relayer signing not supported. Transaction may require user signature.");
-            return tx;
-        }
-    } catch (error) {
-        console.error("Error signing transaction:", error);
-        throw new Error("Failed to sign transaction with relayer");
     }
 }
 
@@ -647,7 +547,7 @@ export async function executeSwap(
     fromTokenAddress: string,
     toTokenAddress: string,
     amount: string,
-    wallet: WalletContextState,
+    walletProvider: Provider,
     slippage = "0.5"
 ): Promise<SwapResult> {
     try {
@@ -656,10 +556,10 @@ export async function executeSwap(
             toTokenAddress,
             amount,
             slippage,
-            walletConnected: !!wallet.publicKey
+            walletConnected: !!walletProvider
         });
 
-        if (!wallet.publicKey) {
+        if (!walletProvider) {
             throw new Error("Wallet not connected");
         }
 
@@ -667,40 +567,28 @@ export async function executeSwap(
             throw new Error("Invalid swap amount");
         }
 
-        const userPublicKey = wallet.publicKey;
-        const userAddress = userPublicKey.toBase58();
+        const userAddress = walletProvider.publicKey.toString();
         console.log("User address:", userAddress);
 
-        // Step 1: Get or initialize user PDA
-        const userPDA = await getUserPDA(userPublicKey);
-        const accountInfo = await connection.getAccountInfo(userPDA);
-        if (!accountInfo) {
-            console.log("User PDA does not exist, initializing...");
-            await initializeUserAccount(userPublicKey, wallet);
-        }
-
-        // Step 2: Deposit funds to PDA (mocked for this example; in production, handle token transfers)
-        const lamportsToDeposit = LAMPORTS_PER_SOL * 0.01; // Mock deposit amount
-        await depositToPDA(userPublicKey, lamportsToDeposit, wallet);
-
-        // Step 3: Get swap data (use PDA address for the swap)
-        const swapData = await getSwapData(fromTokenAddress, toTokenAddress, amount, userPDA.toBase58(), slippage);
+        // Step 1: Get swap data using the user's address directly
+        const swapData = await getSwapData(fromTokenAddress, toTokenAddress, amount, userAddress, slippage);
         const callData = swapData.tx.data;
 
         if (!callData) {
             throw new Error("Invalid transaction data received from API");
         }
 
-        // Step 4: Prepare transaction (executed by PDA, signed by relayer)
-        const transaction = await prepareTransaction(callData, userPDA);
+        // Step 2: Prepare transaction
+        const transaction = await prepareTransaction(callData, userAddress);
 
-        // Step 5: Sign transaction with发明 (gasless for the user)
-        const signedTx = await signTransaction(transaction);
+        // Step 3: Sign and send transaction using wallet provider
+        const signature = await walletProvider.sendTransaction(transaction, connection);
+        console.log("Transaction signed and sent, signature:", signature);
 
-        // Step 6: Broadcast transaction via OKX
-        const orderId = await broadcastTransaction(signedTx);
+        // Step 4: Broadcast transaction via OKX
+        const orderId = await broadcastTransaction(transaction);
 
-        // Step 7: Track transaction via OKX
+        // Step 5: Track transaction via OKX
         const txStatus = await trackTransaction(orderId);
 
         return {
@@ -718,6 +606,18 @@ export async function executeSwap(
     }
 }
 
+// Function to get wallet balance
+export async function getBalance(walletAddress: string): Promise<number> {
+    try {
+        const wallet = new PublicKey(walletAddress);
+        const balance = await connection.getBalance(wallet); // Get the amount in LAMPORTS
+        return balance / LAMPORTS_PER_SOL; // Convert to SOL
+    } catch (error) {
+        console.error("Error fetching balance:", error);
+        throw new Error("Failed to fetch wallet balance");
+    }
+}
+
 // Helper function to clear caches manually if needed
 export function clearCaches(): void {
     tokenInfoCache.clear();
@@ -726,4 +626,5 @@ export function clearCaches(): void {
     console.log("All caches cleared");
 }
 
-export { getTokenInfo, convertAmount, getQuote, initializeUserAccount, depositToPDA };
+export { getTokenInfo, convertAmount, getQuote };
+

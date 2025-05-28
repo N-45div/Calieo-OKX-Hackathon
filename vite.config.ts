@@ -7,9 +7,10 @@ export default defineConfig({
   server: {
     allowedHosts: [
       'localhost',
-      '7fcc-146-196-38-114.ngrok-free.app', // Allow ngrok host
+      'c0c4-146-196-38-115.ngrok-free.app', // Allow ngrok host
     ],
     host: true, // Allow Vite to listen on all network interfaces (required for ngrok)
     port: 5173, // Default Vite port, adjust if needed
   },
+  base: process.env.VITE_BASE_PATH || '/'
 });
