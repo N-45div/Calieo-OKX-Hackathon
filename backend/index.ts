@@ -54,6 +54,17 @@ interface Tweet {
   author_id?: string;
 }
 
+interface OKXPriceInfo {
+  chainIndex: string;
+  tokenContractAddress: string;
+  time: string;
+  price: string;
+  marketCap: string;
+  priceChange24H: string;
+  volume24H: string;
+}
+
+
 interface DexData {
   price: number;
   volume24h: number;
@@ -1006,6 +1017,84 @@ const getOKXSwapInstructions = async (
   throw new Error("Max retries reached for OKX API request in getOKXSwapInstructions");
 };
 
+
+
+// Add this function after getOKXCandlesticks in index.ts
+const getOKXTokenPrices = async (
+  chainIndex: string,
+  tokenContractAddresses: string,
+  retries = 3,
+  delayMs = 2000
+): Promise<OKXPriceInfo[]> => {
+  const timestamp = new Date().toISOString();
+  const path = `dex/market/price-info`;
+  const requestPath = `/api/v5/${path}`;
+
+  const body = JSON.stringify({
+    chainIndex,
+    tokenContractAddress: tokenContractAddresses,
+  });
+
+  const headers = getOKXHeaders(timestamp, "POST", requestPath, "", body);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt} to fetch token prices...`);
+      const response = await axios.post(`${OKX_BASE_URL}${requestPath}`, body, {
+        headers,
+        timeout: 20000,
+      });
+
+      console.log("OKX API Response for Price Info:", response.data);
+
+      if (response.data.code !== "0" || !response.data.data) {
+        throw new Error(`Price Info API Error (${response.data.code}): ${response.data.msg || "Unknown error"}`);
+      }
+
+      return response.data.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        console.error(`OKX API Error on attempt ${attempt} in getOKXTokenPrices:`, {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+        });
+        if (error.response?.status === 429 && attempt < retries) {
+          console.warn(`Rate limit exceeded, retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw new Error(`OKX API Error: ${error.response?.data?.msg || error.message}`);
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries reached for OKX API request in getOKXTokenPrices");
+};
+
+// Add this endpoint after the /api/market/candles endpoint in index.ts
+
+
+// Update the 404 handler to include the new endpoint
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint not found',
+    availableEndpoints: [
+      'GET /api/scan',
+      'GET /api/contract/:address',
+      'GET /api/health',
+      'GET /api/hunters',
+      'GET /api/status',
+      'GET /api/market/candles',
+      'POST /api/scan/trigger',
+      'POST /api/swap/quote',
+      'POST /api/swap/execute',
+      'POST /api/market/price-info', // Added new endpoint
+    ]
+  });
+});
+
 // Fallback: Fetch Swap Data from OKX DEX /swap endpoint (Existing)
 const getOKXSwapData = async (
   fromTokenAddress: string,
@@ -1334,14 +1423,24 @@ app.get('/api/hunters', (req: Request, res: Response) => {
 });
 
 // OKX DEX API Endpoints
+
+
+// OKX DEX API Endpoints
 // Get Candlesticks (New Endpoint)
-app.get('/api/market/candles', asyncHandler(async (req: Request<{}, any, {}, { chainIndex: string; tokenContractAddress: string; bar?: string; after?: string; before?: string; limit?: string }>, res: Response) => {
-  const { chainIndex, tokenContractAddress, bar = "1m", after, before, limit = "100" } = req.query;
+app.get('/api/market/candles', asyncHandler(async (req: Request<{}, any, {}, { 
+  chainIndex: string; 
+  tokenContractAddress: string; 
+  bar?: string;
+  after?: string;
+  before?: string;
+  limit?: string;
+}>, res: Response) => {
+  const { chainIndex, tokenContractAddress, bar, after, before, limit } = req.query;
 
   if (!chainIndex || !tokenContractAddress) {
     return res.status(400).json({
       success: false,
-      error: "Missing required parameters: chainIndex, tokenContractAddress",
+      error: "Missing required parameters: chainIndex, tokenContractAddress"
     });
   }
 
@@ -1356,6 +1455,31 @@ app.get('/api/market/candles', asyncHandler(async (req: Request<{}, any, {}, { c
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to fetch candlestick data",
+    });
+  }
+}));
+
+app.post('/api/market/price-info', asyncHandler(async (req: Request<{}, any, { chainIndex: string; tokenContractAddresses: string }>, res: Response) => {
+  const { chainIndex, tokenContractAddresses } = req.body;
+
+  if (!chainIndex || !tokenContractAddresses) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required parameters: chainIndex, tokenContractAddresses",
+    });
+  }
+
+  try {
+    const prices = await getOKXTokenPrices(chainIndex, tokenContractAddresses);
+    res.json({
+      success: true,
+      data: prices,
+    });
+  } catch (error) {
+    console.error("Error in /api/market/price-info:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch token prices",
     });
   }
 }));

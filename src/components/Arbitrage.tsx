@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import Chart from 'react-apexcharts';
+import { SunIcon, MoonIcon, InformationCircleIcon } from '@heroicons/react/24/solid';
 
 interface CandlestickData {
     ts: number;
@@ -18,9 +20,19 @@ interface ArbitrageOpportunity {
     priceA: number;
     priceB: number;
     potentialProfit: number;
+    adjustedProfit: number;
     volatilityScore: number;
     priceChangeA: number;
     priceChangeB: number;
+    riskScore: number;
+    tokenASymbol?: string;
+    tokenBSymbol?: string;
+    estimatedFee: number;
+}
+
+interface TokenMetadata {
+    symbol: string;
+    name: string;
 }
 
 export default function ArbitrageOpportunities() {
@@ -31,12 +43,15 @@ export default function ArbitrageOpportunities() {
     const [chainIndex, setChainIndex] = useState("1");
     const [customTokens, setCustomTokens] = useState("");
     const [timeframe, setTimeframe] = useState("1H");
+    const [theme, setTheme] = useState<"dark" | "light">("dark");
+    const [tokenMetadata, setTokenMetadata] = useState<Map<string, TokenMetadata>>(new Map());
+    const [investmentAmount, setInvestmentAmount] = useState<number>(1000); // Default investment amount in USD
 
-    // Default token addresses for different chains
+    // Default token addresses for different chains (real addresses)
     const defaultTokens = {
         "1": [ // Ethereum
-            "0xA0b86a33E6441c5c9fe87bb667bd6d3e4D4e3f6a", // WETH
-            "0xA0b73E1Ff0B80914AB6fe0444E65848C4C34450b", // USDC
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH
+            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
             "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", // WBTC
             "0x514910771AF9Ca656af840dff83E8264EcF986CA", // LINK
             "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", // UNI
@@ -45,32 +60,56 @@ export default function ArbitrageOpportunities() {
             "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", // WBNB
             "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // USDC
             "0x55d398326f99059fF775485246999027B3197955", // USDT
+        ],
+        "137": [ // Polygon
+            "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", // WMATIC
+            "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
+            "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", // WBTC
         ]
+    };
+
+    const fetchTokenMetadata = async (tokenAddress: string): Promise<TokenMetadata> => {
+        try {
+            const response = await fetch(`https://api.coingecko.com/api/v3/coins/ethereum/contract/${tokenAddress}`);
+            const data = await response.json();
+            return {
+                symbol: data.symbol?.toUpperCase() || `TOKEN${tokenAddress.slice(-4)}`,
+                name: data.name || `Token ${tokenAddress.slice(0, 4)}...${tokenAddress.slice(-4)}`,
+            };
+        } catch (error) {
+            console.error(`Error fetching metadata for ${tokenAddress}:`, error);
+            return {
+                symbol: `TOKEN${tokenAddress.slice(-4)}`,
+                name: `Token ${tokenAddress.slice(0, 4)}...${tokenAddress.slice(-4)}`,
+            };
+        }
     };
 
     const fetchBatchTokenPrices = async (tokenAddresses: string[]) => {
         try {
-            const response = await fetch('https://web3.okx.com/api/v5/dex/market/price-info', {
+            const response = await fetch('/api/market/price-info', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    // Note: Authentication headers removed; this should be routed through the backend
                 },
                 body: JSON.stringify({
                     chainIndex: chainIndex,
-                    tokenContractAddress: tokenAddresses.join(',')
-                })
+                    tokenContractAddresses: tokenAddresses.join(','),
+                }),
             });
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
 
-            const data = await response.json();
-            return data.data || [];
+            const result = await response.json();
+            if (!result.success) {
+                throw new Error(result.error || "Failed to fetch token prices");
+            }
+
+            return result.data || [];
         } catch (error) {
             console.error('Error fetching batch token prices:', error);
-            // Return mock data for demonstration
             return tokenAddresses.map((address) => ({
                 chainIndex: chainIndex,
                 tokenContractAddress: address,
@@ -78,14 +117,13 @@ export default function ArbitrageOpportunities() {
                 price: (Math.random() * 1000 + 1).toFixed(6),
                 marketCap: (Math.random() * 1000000000).toFixed(0),
                 priceChange24H: ((Math.random() - 0.5) * 20).toFixed(2),
-                volume24H: (Math.random() * 10000000).toFixed(0)
+                volume24H: (Math.random() * 10000000).toFixed(0),
             }));
         }
     };
 
     const fetchCandlestickData = async (tokenAddress: string) => {
         try {
-            // Call the backend endpoint instead of directly hitting the OKX API
             const params = new URLSearchParams({
                 chainIndex,
                 tokenContractAddress: tokenAddress,
@@ -104,22 +142,20 @@ export default function ArbitrageOpportunities() {
                 throw new Error(result.error || "Failed to fetch candlestick data");
             }
 
-            // Transform the data to match CandlestickData interface
-            const candlesticks = (result.data || []).map((candle: CandlestickData) => ({
-                ts: candle.ts,
-                o: candle.o,
-                h: candle.h,
-                l: candle.l,
-                c: candle.c,
-                vol: candle.vol,
-                volUsd: candle.volUsd,
-                confirm: candle.confirm,
+            const candlesticks = (result.data || []).map((candle: any) => ({
+                ts: parseInt(candle.ts),
+                o: parseFloat(candle.o),
+                h: parseFloat(candle.h),
+                l: parseFloat(candle.l),
+                c: parseFloat(candle.c),
+                vol: parseFloat(candle.vol),
+                volUsd: parseFloat(candle.volUsd),
+                confirm: parseInt(candle.confirm),
             }));
 
             return candlesticks;
         } catch (error) {
             console.error('Error fetching candlestick data:', error);
-            // Return mock candlestick data
             const mockData = [];
             const now = Date.now();
             for (let i = 99; i >= 0; i--) {
@@ -128,68 +164,108 @@ export default function ArbitrageOpportunities() {
                 const close = open + (Math.random() - 0.5) * 5;
                 const high = Math.max(open, close) + Math.random() * 3;
                 const low = Math.min(open, close) - Math.random() * 3;
-                
+
                 mockData.push({
-                    ts: now - (i * 3600000), // 1 hour intervals
+                    ts: now - (i * 3600000),
                     o: open,
                     h: high,
                     l: low,
                     c: close,
                     vol: Math.random() * 1000,
                     volUsd: Math.random() * 100000,
-                    confirm: 1
+                    confirm: 1,
                 });
             }
             return mockData;
         }
     };
 
+    const estimateTransactionFee = (chainIndex: string): number => {
+        // Simplified fee estimation based on chain (in USD)
+        const fees: { [key: string]: number } = {
+            "1": 50, // Ethereum: High gas fees
+            "56": 1,  // BSC: Low fees
+            "137": 0.5, // Polygon: Very low fees
+        };
+        return fees[chainIndex] || 10; // Default to $10 if chain not found
+    };
+
+    const calculateRiskScore = (opp: ArbitrageOpportunity): number => {
+        let riskScore = 50;
+        if (opp.potentialProfit > 5) riskScore -= 20;
+        else if (opp.potentialProfit < 0.5) riskScore += 20;
+        if (opp.volatilityScore > 10) riskScore += 30;
+        else if (opp.volatilityScore < 5) riskScore -= 10;
+        if (Math.abs(opp.priceChangeA) > 15 || Math.abs(opp.priceChangeB) > 15) riskScore += 20;
+        return Math.max(0, Math.min(100, riskScore));
+    };
+
     const findArbitrageOpportunities = async (tokenAddresses: string[]) => {
         const prices = await fetchBatchTokenPrices(tokenAddresses);
         const opportunities: ArbitrageOpportunity[] = [];
+
+        // Fetch token metadata
+        for (const token of tokenAddresses) {
+            if (!tokenMetadata.has(token)) {
+                const metadata = await fetchTokenMetadata(token);
+                setTokenMetadata(prev => new Map(prev).set(token, metadata));
+            }
+        }
+
+        const feePerTrade = estimateTransactionFee(chainIndex);
 
         for (let i = 0; i < prices.length; i++) {
             for (let j = i + 1; j < prices.length; j++) {
                 const tokenA = prices[i];
                 const tokenB = prices[j];
-                
+
                 const priceA = parseFloat(tokenA.price);
                 const priceB = parseFloat(tokenB.price);
                 const priceChangeA = parseFloat(tokenA.priceChange24H);
                 const priceChangeB = parseFloat(tokenB.priceChange24H);
-                
+
                 const priceDiff = Math.abs(priceA - priceB);
                 const avgPrice = (priceA + priceB) / 2;
                 const potentialProfit = (priceDiff / avgPrice) * 100;
-                
-                // Calculate volatility score based on price changes
+
                 const volatilityScore = (Math.abs(priceChangeA) + Math.abs(priceChangeB)) / 2;
-                
-                if (potentialProfit > 0.1) { // Only show opportunities with >0.1% potential profit
-                    opportunities.push({
+
+                if (potentialProfit > 0.1) {
+                    const totalFees = feePerTrade * 2; // Two trades: buy and sell
+                    const feePercentage = (totalFees / investmentAmount) * 100;
+                    const adjustedProfit = Math.max(0, potentialProfit - feePercentage);
+
+                    const opp: ArbitrageOpportunity = {
                         tokenA: tokenA.tokenContractAddress,
                         tokenB: tokenB.tokenContractAddress,
                         priceA,
                         priceB,
                         potentialProfit,
+                        adjustedProfit,
                         volatilityScore,
                         priceChangeA,
-                        priceChangeB
-                    });
+                        priceChangeB,
+                        riskScore: 0,
+                        tokenASymbol: tokenMetadata.get(tokenA.tokenContractAddress)?.symbol,
+                        tokenBSymbol: tokenMetadata.get(tokenB.tokenContractAddress)?.symbol,
+                        estimatedFee: totalFees,
+                    };
+                    opp.riskScore = calculateRiskScore(opp);
+                    opportunities.push(opp);
                 }
             }
         }
 
-        return opportunities.sort((a, b) => b.potentialProfit - a.potentialProfit);
+        return opportunities.sort((a, b) => b.adjustedProfit - a.adjustedProfit);
     };
 
     const handleFetchOpportunities = async () => {
         setLoading(true);
         try {
-            const tokenAddresses = customTokens 
+            const tokenAddresses = customTokens
                 ? customTokens.split(',').map(addr => addr.trim()).filter(addr => addr)
                 : defaultTokens[chainIndex as keyof typeof defaultTokens] || defaultTokens["1"];
-            
+
             const opps = await findArbitrageOpportunities(tokenAddresses);
             setOpportunities(opps);
         } catch (error) {
@@ -201,7 +277,7 @@ export default function ArbitrageOpportunities() {
 
     const handleFetchCandlesticks = async () => {
         if (!selectedToken) return;
-        
+
         setLoading(true);
         try {
             const data = await fetchCandlestickData(selectedToken);
@@ -215,7 +291,9 @@ export default function ArbitrageOpportunities() {
 
     useEffect(() => {
         handleFetchOpportunities();
-    }, [chainIndex]);
+        const interval = setInterval(handleFetchOpportunities, 30000); // Poll every 30 seconds
+        return () => clearInterval(interval);
+    }, [chainIndex, investmentAmount]);
 
     useEffect(() => {
         if (selectedToken) {
@@ -223,30 +301,68 @@ export default function ArbitrageOpportunities() {
         }
     }, [selectedToken, timeframe]);
 
-    // Format candlestick data for chart
     const chartData = candlestickData.map(candle => ({
-        time: new Date(candle.ts).toLocaleTimeString(),
-        price: candle.c,
+        x: new Date(candle.ts),
+        y: [candle.o, candle.h, candle.l, candle.c],
         volume: candle.volUsd,
-        high: candle.h,
-        low: candle.l,
     }));
 
+    const volumeChartData = candlestickData.map(candle => ({
+        time: new Date(candle.ts).toLocaleString(),
+        volume: candle.volUsd,
+    }));
+
+    const toggleTheme = () => {
+        setTheme(theme === "dark" ? "light" : "dark");
+    };
+
+    const bestOpportunity = opportunities.length > 0 ? opportunities[0] : null;
+
     return (
-        <div className="p-6 bg-gradient-to-br from-gray-900 to-gray-800 min-h-screen text-white">
+        <div className={`p-6 min-h-screen ${theme === "dark" ? "bg-gradient-to-br from-gray-900 to-gray-800 text-white" : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-900"} transition-all duration-300`}>
             <div className="max-w-7xl mx-auto">
-                <h1 className="text-3xl font-bold mb-8 text-center bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                    Dynamic Arbitrage Opportunities Dashboard
-                </h1>
+                <div className="flex justify-between items-center mb-8">
+                    <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                        Smart Arbitrage Dashboard
+                    </h1>
+                    <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-700 transition-all">
+                        {theme === "dark" ? <SunIcon className="w-6 h-6 text-yellow-400" /> : <MoonIcon className="w-6 h-6 text-gray-800" />}
+                    </button>
+                </div>
+
+                {/* Summary Card */}
+                {bestOpportunity && (
+                    <div className={`p-6 rounded-lg border mb-8 ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-xl font-semibold mb-2">Best Opportunity</h3>
+                                <p className="text-lg">
+                                    {bestOpportunity.tokenASymbol || bestOpportunity.tokenA.slice(0, 10) + "..."} ↔{" "}
+                                    {bestOpportunity.tokenBSymbol || bestOpportunity.tokenB.slice(0, 10) + "..."}
+                                </p>
+                                <p className="text-green-400">Adjusted Profit: {bestOpportunity.adjustedProfit.toFixed(4)}%</p>
+                                <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+                                    Estimated Profit for ${investmentAmount}: ${(investmentAmount * (bestOpportunity.adjustedProfit / 100)).toFixed(2)}
+                                </p>
+                            </div>
+                            <div className="text-right">
+                                <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Risk Score</p>
+                                <p className={`font-medium ${bestOpportunity.riskScore > 70 ? "text-red-400" : bestOpportunity.riskScore > 40 ? "text-yellow-400" : "text-green-400"}`}>
+                                    {bestOpportunity.riskScore.toFixed(0)}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Controls */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+                    <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <label className="block text-sm font-medium mb-2">Chain</label>
-                        <select 
-                            value={chainIndex} 
+                        <select
+                            value={chainIndex}
                             onChange={(e) => setChainIndex(e.target.value)}
-                            className="w-full p-2 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-blue-500"
+                            className={`w-full p-2 rounded focus:ring-2 focus:ring-blue-500 ${theme === "dark" ? "bg-gray-700 border-gray-600" : "bg-gray-100 border-gray-300"}`}
                         >
                             <option value="1">Ethereum</option>
                             <option value="56">BSC</option>
@@ -254,12 +370,12 @@ export default function ArbitrageOpportunities() {
                         </select>
                     </div>
 
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                    <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <label className="block text-sm font-medium mb-2">Timeframe</label>
-                        <select 
-                            value={timeframe} 
+                        <select
+                            value={timeframe}
                             onChange={(e) => setTimeframe(e.target.value)}
-                            className="w-full p-2 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-blue-500"
+                            className={`w-full p-2 rounded focus:ring-2 focus:ring-blue-500 ${theme === "dark" ? "bg-gray-700 border-gray-600" : "bg-gray-100 border-gray-300"}`}
                         >
                             <option value="1m">1 Minute</option>
                             <option value="5m">5 Minutes</option>
@@ -270,22 +386,41 @@ export default function ArbitrageOpportunities() {
                         </select>
                     </div>
 
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                    <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <label className="block text-sm font-medium mb-2">Token for Chart</label>
                         <input
                             type="text"
                             value={selectedToken}
                             onChange={(e) => setSelectedToken(e.target.value)}
                             placeholder="Token contract address"
-                            className="w-full p-2 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-blue-500"
+                            className={`w-full p-2 rounded focus:ring-2 focus:ring-blue-500 ${theme === "dark" ? "bg-gray-700 border-gray-600" : "bg-gray-100 border-gray-300"}`}
                         />
                     </div>
 
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                    <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
+                        <label className="block text-sm font-medium mb-2 flex items-center">
+                            Investment Amount (USD)
+                            <span className="relative group ml-1">
+                                <InformationCircleIcon className="w-4 h-4 text-gray-400" />
+                                <span className={`absolute bottom-full mb-2 hidden group-hover:block text-xs p-2 rounded ${theme === "dark" ? "bg-gray-700 text-gray-300" : "bg-gray-200 text-gray-700"}`}>
+                                    Amount to invest for profit estimation
+                                </span>
+                            </span>
+                        </label>
+                        <input
+                            type="number"
+                            value={investmentAmount}
+                            onChange={(e) => setInvestmentAmount(parseFloat(e.target.value) || 0)}
+                            placeholder="1000"
+                            className={`w-full p-2 rounded focus:ring-2 focus:ring-blue-500 ${theme === "dark" ? "bg-gray-700 border-gray-600" : "bg-gray-100 border-gray-300"}`}
+                        />
+                    </div>
+
+                    <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <button
                             onClick={handleFetchOpportunities}
                             disabled={loading}
-                            className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 px-4 py-2 rounded font-medium transition-all duration-200"
+                            className={`w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 px-4 py-2 rounded font-medium transition-all duration-200 ${theme === "dark" ? "text-white" : "text-gray-900"}`}
                         >
                             {loading ? "Loading..." : "Refresh Data"}
                         </button>
@@ -293,49 +428,107 @@ export default function ArbitrageOpportunities() {
                 </div>
 
                 {/* Custom Tokens Input */}
-                <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 mb-8">
+                <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"} mb-8`}>
                     <label className="block text-sm font-medium mb-2">Custom Token Addresses (comma-separated)</label>
                     <textarea
                         value={customTokens}
                         onChange={(e) => setCustomTokens(e.target.value)}
-                        placeholder="0xA0b86a33E6441c5c9fe87bb667bd6d3e4D4e3f6a, 0xA0b73E1Ff0B80914AB6fe0444E65848C4C34450b..."
-                        className="w-full p-3 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-blue-500 h-24 resize-none"
+                        placeholder="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2, 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48..."
+                        className={`w-full p-3 rounded focus:ring-2 focus:ring-blue-500 h-24 resize-none ${theme === "dark" ? "bg-gray-700 border-gray-600" : "bg-gray-100 border-gray-300"}`}
                     />
-                    <p className="text-xs text-gray-400 mt-1">Leave empty to use default tokens for selected chain</p>
+                    <p className={`text-xs mt-1 ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Leave empty to use default tokens for selected chain</p>
                 </div>
 
-                {/* Candlestick Chart */}
+                {/* Candlestick Chart with Volume Overlay */}
                 {candlestickData.length > 0 && (
-                    <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 mb-8">
-                        <h3 className="text-xl font-semibold mb-4">Price Chart</h3>
-                        <div className="h-80">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={chartData}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                                    <XAxis dataKey="time" stroke="#9CA3AF" />
-                                    <YAxis stroke="#9CA3AF" />
-                                    <Tooltip 
-                                        contentStyle={{ 
-                                            backgroundColor: '#1F2937', 
-                                            border: '1px solid #374151',
-                                            borderRadius: '8px'
-                                        }} 
-                                    />
-                                    <Line 
-                                        type="monotone" 
-                                        dataKey="price" 
-                                        stroke="#3B82F6" 
-                                        strokeWidth={2}
-                                        dot={{ fill: '#3B82F6', strokeWidth: 2, r: 3 }}
-                                    />
-                                </LineChart>
-                            </ResponsiveContainer>
+                    <div className={`p-6 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"} mb-8`}>
+                        <h3 className="text-xl font-semibold mb-4">Candlestick Chart</h3>
+                        <div className="h-96">
+                            <Chart
+                                options={{
+                                    chart: {
+                                        type: 'candlestick',
+                                        background: theme === "dark" ? '#1F2937' : '#FFFFFF',
+                                        height: 350,
+                                    },
+                                    title: {
+                                        text: `${tokenMetadata.get(selectedToken)?.symbol || 'Token'} Price`,
+                                        align: 'left',
+                                        style: {
+                                            color: theme === "dark" ? "#FFFFFF" : "#1F2937",
+                                        },
+                                    },
+                                    xaxis: {
+                                        type: 'datetime',
+                                        labels: {
+                                            style: {
+                                                colors: theme === "dark" ? "#9CA3AF" : "#4B5563",
+                                            },
+                                        },
+                                    },
+                                    yaxis: [
+                                        {
+                                            title: {
+                                                text: 'Price (USD)',
+                                                style: {
+                                                    color: theme === "dark" ? "#9CA3AF" : "#4B5563",
+                                                },
+                                            },
+                                            labels: {
+                                                style: {
+                                                    colors: theme === "dark" ? "#9CA3AF" : "#4B5563",
+                                                },
+                                            },
+                                        },
+                                        {
+                                            opposite: true,
+                                            title: {
+                                                text: 'Volume (USD)',
+                                                style: {
+                                                    color: theme === "dark" ? "#9CA3AF" : "#4B5563",
+                                                },
+                                            },
+                                            labels: {
+                                                style: {
+                                                    colors: theme === "dark" ? "#9CA3AF" : "#4B5563",
+                                                },
+                                            },
+                                        },
+                                    ],
+                                    plotOptions: {
+                                        candlestick: {
+                                            colors: {
+                                                upward: theme === "dark" ? "#34D399" : "#10B981",
+                                                downward: theme === "dark" ? "#EF4444" : "#F87171",
+                                            },
+                                        },
+                                    },
+                                    tooltip: {
+                                        theme: theme === "dark" ? "dark" : "light",
+                                    },
+                                }}
+                                series={[{
+                                    data: chartData.map(d => ({
+                                        x: d.x,
+                                        y: d.y
+                                    }))
+                                }, {
+                                    name: 'Volume',
+                                    type: 'column',
+                                    data: chartData.map(d => ({
+                                        x: d.x,
+                                        y: d.volume
+                                    }))
+                                }]}
+                                type="candlestick"
+                                height="100%"
+                            />
                         </div>
                     </div>
                 )}
 
                 {/* Arbitrage Opportunities */}
-                <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+                <div className={`p-6 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                     <h3 className="text-xl font-semibold mb-4">Arbitrage Opportunities</h3>
                     {loading ? (
                         <div className="flex items-center justify-center py-8">
@@ -345,35 +538,56 @@ export default function ArbitrageOpportunities() {
                     ) : opportunities.length > 0 ? (
                         <div className="grid gap-4">
                             {opportunities.slice(0, 10).map((opp, index) => (
-                                <div key={index} className="bg-gray-700 p-4 rounded-lg border border-gray-600 hover:border-blue-500 transition-colors duration-200">
-                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div
+                                    key={index}
+                                    className={`p-4 rounded-lg border transition-all duration-200 transform hover:scale-105 ${theme === "dark" ? "bg-gray-700 border-gray-600 hover:border-blue-500" : "bg-gray-50 border-gray-200 hover:border-blue-400"}`}
+                                >
+                                    <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
                                         <div>
-                                            <p className="text-sm text-gray-400">Token A</p>
-                                            <p className="font-mono text-sm">{opp.tokenA.slice(0, 10)}...</p>
+                                            <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Token A</p>
+                                            <p className="font-mono text-sm">{opp.tokenASymbol || opp.tokenA.slice(0, 10) + "..."}</p>
                                             <p className="text-green-400">${opp.priceA.toFixed(6)}</p>
-                                            <p className={`text-xs ${opp.priceChangeA >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                            <p className={`text-xs ${opp.priceChangeA >= 0 ? "text-green-400" : "text-red-400"}`}>
                                                 {opp.priceChangeA >= 0 ? '+' : ''}{opp.priceChangeA.toFixed(2)}%
                                             </p>
                                         </div>
                                         <div>
-                                            <p className="text-sm text-gray-400">Token B</p>
-                                            <p className="font-mono text-sm">{opp.tokenB.slice(0, 10)}...</p>
+                                            <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Token B</p>
+                                            <p className="font-mono text-sm">{opp.tokenBSymbol || opp.tokenB.slice(0, 10) + "..."}</p>
                                             <p className="text-green-400">${opp.priceB.toFixed(6)}</p>
-                                            <p className={`text-xs ${opp.priceChangeB >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                            <p className={`text-xs ${opp.priceChangeB >= 0 ? "text-green-400" : "text-red-400"}`}>
                                                 {opp.priceChangeB >= 0 ? '+' : ''}{opp.priceChangeB.toFixed(2)}%
                                             </p>
                                         </div>
                                         <div>
-                                            <p className="text-sm text-gray-400">Potential Profit</p>
+                                            <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Potential Profit</p>
                                             <p className="text-yellow-400 font-semibold text-lg">{opp.potentialProfit.toFixed(4)}%</p>
+                                            <p className={`text-xs ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>After Fees: {opp.adjustedProfit.toFixed(4)}%</p>
                                         </div>
                                         <div>
-                                            <p className="text-sm text-gray-400">Volatility Score</p>
+                                            <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Est. Profit</p>
+                                            <p className="text-green-400 font-medium">${(investmentAmount * (opp.adjustedProfit / 100)).toFixed(2)}</p>
+                                            <p className={`text-xs ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Fees: ${opp.estimatedFee.toFixed(2)}</p>
+                                        </div>
+                                        <div>
+                                            <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Volatility Score</p>
                                             <p className="text-blue-400 font-medium">{opp.volatilityScore.toFixed(2)}</p>
-                                            <div className="w-full bg-gray-600 rounded-full h-2 mt-1">
-                                                <div 
-                                                    className="bg-blue-500 h-2 rounded-full" 
+                                            <div className={`w-full rounded-full h-2 mt-1 ${theme === "dark" ? "bg-gray-600" : "bg-gray-300"}`}>
+                                                <div
+                                                    className="bg-blue-500 h-2 rounded-full"
                                                     style={{ width: `${Math.min(opp.volatilityScore * 2, 100)}%` }}
+                                                ></div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <p className={`text-sm ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Risk Score</p>
+                                            <p className={`font-medium ${opp.riskScore > 70 ? "text-red-400" : opp.riskScore > 40 ? "text-yellow-400" : "text-green-400"}`}>
+                                                {opp.riskScore.toFixed(0)}
+                                            </p>
+                                            <div className={`w-full rounded-full h-2 mt-1 ${theme === "dark" ? "bg-gray-600" : "bg-gray-300"}`}>
+                                                <div
+                                                    className={`${opp.riskScore > 70 ? "bg-red-500" : opp.riskScore > 40 ? "bg-yellow-500" : "bg-green-500"} h-2 rounded-full`}
+                                                    style={{ width: `${opp.riskScore}%` }}
                                                 ></div>
                                             </div>
                                         </div>
@@ -382,7 +596,7 @@ export default function ArbitrageOpportunities() {
                             ))}
                         </div>
                     ) : (
-                        <div className="text-center py-8 text-gray-400">
+                        <div className={`text-center py-8 ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
                             <p>No arbitrage opportunities found.</p>
                             <p className="text-sm mt-2">Try adjusting your token selection or chain.</p>
                         </div>
@@ -391,22 +605,23 @@ export default function ArbitrageOpportunities() {
 
                 {/* Volume Chart */}
                 {candlestickData.length > 0 && (
-                    <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 mt-8">
+                    <div className={`p-6 rounded-lg border mt-8 ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <h3 className="text-xl font-semibold mb-4">Volume Chart</h3>
                         <div className="h-60">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={chartData}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                                    <XAxis dataKey="time" stroke="#9CA3AF" />
-                                    <YAxis stroke="#9CA3AF" />
-                                    <Tooltip 
-                                        contentStyle={{ 
-                                            backgroundColor: '#1F2937', 
-                                            border: '1px solid #374151',
-                                            borderRadius: '8px'
-                                        }} 
+                                <BarChart data={volumeChartData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke={theme === "dark" ? "#374151" : "#D1D5DB"} />
+                                    <XAxis dataKey="time" stroke={theme === "dark" ? "#9CA3AF" : "#4B5563"} />
+                                    <YAxis stroke={theme === "dark" ? "#9CA3AF" : "#4B5563"} />
+                                    <Tooltip
+                                        contentStyle={{
+                                            backgroundColor: theme === "dark" ? '#1F2937' : '#F3F4F6',
+                                            border: `1px solid ${theme === "dark" ? "#374151" : "#D1D5DB"}`,
+                                            borderRadius: '8px',
+                                            color: theme === "dark" ? "#FFFFFF" : "#1F2937",
+                                        }}
                                     />
-                                    <Bar dataKey="volume" fill="#8B5CF6" />
+                                    <Bar dataKey="volume" fill={theme === "dark" ? "#8B5CF6" : "#A78BFA"} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
