@@ -28,15 +28,15 @@ app.use(cors());
 app.use(express.json());
 
 // Configuration
-const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN || "AAAAAAAAAAAAAAAAAAAAAFxqzQEAAAAAZPRCRDTeJ8uOt56coy0%2F3kmTZwo%3DtEwps4FR9lNh8DKt4C6rqGcGZ9b34n1GoN8fTX1bXzd0xgzW5e";
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=2d8978c6-7067-459f-ae97-7ea035f1a0cb';
+const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN || "";
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || '';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
 // OKX DEX API Configuration
-const OKX_API_KEY = process.env.OKX_API_KEY || "a6fc5617-9e0f-4987-a6a3-d5a7418c7caf";
-const OKX_SECRET_KEY = process.env.OKX_SECRET_KEY || "4C33F9BA43D965660AA2C2F81716CA61";
-const OKX_API_PASSPHRASE = process.env.OKX_API_PASSPHRASE || "suresh@76sdthA";
-const OKX_PROJECT_ID = process.env.OKX_PROJECT_ID || "4e98d3b439e16bcb09cb98ea0a9524bf";
+const OKX_API_KEY = process.env.OKX_API_KEY || "";
+const OKX_SECRET_KEY = process.env.OKX_SECRET_KEY || "";
+const OKX_API_PASSPHRASE = process.env.OKX_API_PASSPHRASE || "";
+const OKX_PROJECT_ID = process.env.OKX_PROJECT_ID || "";
 const OKX_BASE_URL = "https://web3.okx.com";
 const SOLANA_CHAIN_INDEX = "501"; // Solana Mainnet chainIndex
 const SOLANA_CHAIN_ID = "501"; // Deprecated chainId
