@@ -39,29 +39,32 @@ export default function ArbitrageOpportunities() {
     const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>([]);
     const [loading, setLoading] = useState(false);
     const [candlestickData, setCandlestickData] = useState<CandlestickData[]>([]);
+    const [candlestickError, setCandlestickError] = useState<string | null>(null);
     const [selectedToken, setSelectedToken] = useState("");
     const [chainIndex, setChainIndex] = useState("1");
     const [customTokens, setCustomTokens] = useState("");
     const [timeframe, setTimeframe] = useState("1H");
     const [theme, setTheme] = useState<"dark" | "light">("dark");
     const [tokenMetadata, setTokenMetadata] = useState<Map<string, TokenMetadata>>(new Map());
-    const [investmentAmount, setInvestmentAmount] = useState<number>(1000); // Default investment amount in USD
+    const [investmentAmount, setInvestmentAmount] = useState<number>(1000);
 
-    // Default token addresses for different chains (real addresses)
+    // Use the backend URL from the environment variable
+    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+
     const defaultTokens = {
-        "1": [ // Ethereum
+        "1": [
             "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH
             "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
             "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", // WBTC
             "0x514910771AF9Ca656af840dff83E8264EcF986CA", // LINK
             "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", // UNI
         ],
-        "56": [ // BSC
+        "56": [
             "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", // WBNB
             "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // USDC
             "0x55d398326f99059fF775485246999027B3197955", // USDT
         ],
-        "137": [ // Polygon
+        "137": [
             "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", // WMATIC
             "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
             "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", // WBTC
@@ -87,7 +90,7 @@ export default function ArbitrageOpportunities() {
 
     const fetchBatchTokenPrices = async (tokenAddresses: string[]) => {
         try {
-            const response = await fetch('/api/market/price-info', {
+            const response = await fetch(`${BACKEND_URL}/api/market/price-info`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -123,6 +126,15 @@ export default function ArbitrageOpportunities() {
     };
 
     const fetchCandlestickData = async (tokenAddress: string) => {
+        if (!tokenAddress || !tokenAddress.startsWith('0x') || tokenAddress.length !== 42) {
+            throw new Error("Invalid token contract address");
+        }
+
+        const validChains = ["1", "56", "137"];
+        if (!validChains.includes(chainIndex)) {
+            throw new Error(`Unsupported chainIndex: ${chainIndex}. Supported chains: Ethereum (1), BSC (56), Polygon (137)`);
+        }
+
         try {
             const params = new URLSearchParams({
                 chainIndex,
@@ -131,7 +143,7 @@ export default function ArbitrageOpportunities() {
                 limit: "100",
             });
 
-            const response = await fetch(`/api/market/candles?${params.toString()}`);
+            const response = await fetch(`${BACKEND_URL}/api/market/candles?${params.toString()}`);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -142,7 +154,11 @@ export default function ArbitrageOpportunities() {
                 throw new Error(result.error || "Failed to fetch candlestick data");
             }
 
-            const candlesticks = (result.data || []).map((candle: any) => ({
+            if (!result.data || result.data.length === 0) {
+                throw new Error("No candlestick data available for this token");
+            }
+
+            const candlesticks = result.data.map((candle: any) => ({
                 ts: parseInt(candle.ts),
                 o: parseFloat(candle.o),
                 h: parseFloat(candle.h),
@@ -156,38 +172,17 @@ export default function ArbitrageOpportunities() {
             return candlesticks;
         } catch (error) {
             console.error('Error fetching candlestick data:', error);
-            const mockData = [];
-            const now = Date.now();
-            for (let i = 99; i >= 0; i--) {
-                const basePrice = 100 + Math.random() * 50;
-                const open = basePrice + (Math.random() - 0.5) * 10;
-                const close = open + (Math.random() - 0.5) * 5;
-                const high = Math.max(open, close) + Math.random() * 3;
-                const low = Math.min(open, close) - Math.random() * 3;
-
-                mockData.push({
-                    ts: now - (i * 3600000),
-                    o: open,
-                    h: high,
-                    l: low,
-                    c: close,
-                    vol: Math.random() * 1000,
-                    volUsd: Math.random() * 100000,
-                    confirm: 1,
-                });
-            }
-            return mockData;
+            throw error;
         }
     };
 
     const estimateTransactionFee = (chainIndex: string): number => {
-        // Simplified fee estimation based on chain (in USD)
         const fees: { [key: string]: number } = {
-            "1": 50, // Ethereum: High gas fees
-            "56": 1,  // BSC: Low fees
-            "137": 0.5, // Polygon: Very low fees
+            "1": 50,
+            "56": 1,
+            "137": 0.5,
         };
-        return fees[chainIndex] || 10; // Default to $10 if chain not found
+        return fees[chainIndex] || 10;
     };
 
     const calculateRiskScore = (opp: ArbitrageOpportunity): number => {
@@ -204,7 +199,6 @@ export default function ArbitrageOpportunities() {
         const prices = await fetchBatchTokenPrices(tokenAddresses);
         const opportunities: ArbitrageOpportunity[] = [];
 
-        // Fetch token metadata
         for (const token of tokenAddresses) {
             if (!tokenMetadata.has(token)) {
                 const metadata = await fetchTokenMetadata(token);
@@ -231,7 +225,7 @@ export default function ArbitrageOpportunities() {
                 const volatilityScore = (Math.abs(priceChangeA) + Math.abs(priceChangeB)) / 2;
 
                 if (potentialProfit > 0.1) {
-                    const totalFees = feePerTrade * 2; // Two trades: buy and sell
+                    const totalFees = feePerTrade * 2;
                     const feePercentage = (totalFees / investmentAmount) * 100;
                     const adjustedProfit = Math.max(0, potentialProfit - feePercentage);
 
@@ -279,11 +273,12 @@ export default function ArbitrageOpportunities() {
         if (!selectedToken) return;
 
         setLoading(true);
+        setCandlestickError(null);
         try {
             const data = await fetchCandlestickData(selectedToken);
             setCandlestickData(data);
         } catch (error) {
-            console.error("Error fetching candlestick data:", error);
+            setCandlestickError(error instanceof Error ? error.message : "Failed to fetch candlestick data");
         } finally {
             setLoading(false);
         }
@@ -291,7 +286,7 @@ export default function ArbitrageOpportunities() {
 
     useEffect(() => {
         handleFetchOpportunities();
-        const interval = setInterval(handleFetchOpportunities, 30000); // Poll every 30 seconds
+        const interval = setInterval(handleFetchOpportunities, 30000);
         return () => clearInterval(interval);
     }, [chainIndex, investmentAmount]);
 
@@ -330,7 +325,6 @@ export default function ArbitrageOpportunities() {
                     </button>
                 </div>
 
-                {/* Summary Card */}
                 {bestOpportunity && (
                     <div className={`p-6 rounded-lg border mb-8 ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <div className="flex items-center justify-between">
@@ -355,7 +349,6 @@ export default function ArbitrageOpportunities() {
                     </div>
                 )}
 
-                {/* Controls */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
                     <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <label className="block text-sm font-medium mb-2">Chain</label>
@@ -427,7 +420,6 @@ export default function ArbitrageOpportunities() {
                     </div>
                 </div>
 
-                {/* Custom Tokens Input */}
                 <div className={`p-4 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"} mb-8`}>
                     <label className="block text-sm font-medium mb-2">Custom Token Addresses (comma-separated)</label>
                     <textarea
@@ -439,8 +431,13 @@ export default function ArbitrageOpportunities() {
                     <p className={`text-xs mt-1 ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>Leave empty to use default tokens for selected chain</p>
                 </div>
 
-                {/* Candlestick Chart with Volume Overlay */}
-                {candlestickData.length > 0 && (
+                {candlestickError ? (
+                    <div className={`p-6 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"} mb-8 text-red-400`}>
+                        <h3 className="text-xl font-semibold mb-4">Candlestick Chart Error</h3>
+                        <p>{candlestickError}</p>
+                        <p className="text-sm mt-2">Please check the token address and chain, or try a different token.</p>
+                    </div>
+                ) : candlestickData.length > 0 ? (
                     <div className={`p-6 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"} mb-8`}>
                         <h3 className="text-xl font-semibold mb-4">Candlestick Chart</h3>
                         <div className="h-96">
@@ -507,27 +504,33 @@ export default function ArbitrageOpportunities() {
                                         theme: theme === "dark" ? "dark" : "light",
                                     },
                                 }}
-                                series={[{
-                                    data: chartData.map(d => ({
-                                        x: d.x,
-                                        y: d.y
-                                    }))
-                                }, {
-                                    name: 'Volume',
-                                    type: 'column',
-                                    data: chartData.map(d => ({
-                                        x: d.x,
-                                        y: d.volume
-                                    }))
-                                }]}
+                                series={[
+                                    {
+                                        name: 'Price',
+                                        type: 'candlestick',
+                                        data: chartData,
+                                    },
+                                    {
+                                        name: 'Volume',
+                                        type: 'bar',
+                                        data: chartData.map(d => ({
+                                            x: d.x,
+                                            y: d.volume,
+                                        })),
+                                    },
+                                ]}
                                 type="candlestick"
                                 height="100%"
                             />
                         </div>
                     </div>
+                ) : selectedToken && (
+                    <div className={`p-6 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"} mb-8 text-gray-400`}>
+                        <h3 className="text-xl font-semibold mb-4">Candlestick Chart</h3>
+                        <p>No candlestick data to display. Please select a token and click "Refresh Data".</p>
+                    </div>
                 )}
 
-                {/* Arbitrage Opportunities */}
                 <div className={`p-6 rounded-lg border ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                     <h3 className="text-xl font-semibold mb-4">Arbitrage Opportunities</h3>
                     {loading ? (
@@ -603,7 +606,6 @@ export default function ArbitrageOpportunities() {
                     )}
                 </div>
 
-                {/* Volume Chart */}
                 {candlestickData.length > 0 && (
                     <div className={`p-6 rounded-lg border mt-8 ${theme === "dark" ? "bg-gray-800 border-gray-700" : "bg-white border-gray-300"}`}>
                         <h3 className="text-xl font-semibold mb-4">Volume Chart</h3>
