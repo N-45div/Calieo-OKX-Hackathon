@@ -49,7 +49,7 @@ export default function ArbitrageOpportunities() {
     const [investmentAmount, setInvestmentAmount] = useState<number>(1000);
 
     // Use the backend URL from the environment variable
-    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://web3.okx.com";
 
     const defaultTokens = {
         "1": [
