@@ -251,7 +251,7 @@ npm run dev
 
 ### Backend WebSocket
 
-- Provides real-time contract updates to `SolanaAlphaHunter.tsx`.
+- Provides real-time contract updates to `KOLAnalysis.tsx`.
 
 ### Backend REST API
 
